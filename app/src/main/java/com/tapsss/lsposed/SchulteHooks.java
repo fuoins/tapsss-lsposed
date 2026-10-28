@@ -280,6 +280,11 @@ public final class SchulteHooks {
     static final String KEY_FROM_SETTINGS = "tapsss_from_settings";
     /** 本局已判定为新纪录：官方成绩弹窗放行（由 $b.d 打标记，$c.z 消费） */
     private static final String KEY_RESULT_ALLOWED = "tapsss_result_allowed";
+    /** $b.d 时同步抓到的本局成绩与归属：$c.z 可能因校时请求而晚到，不能再读现场 */
+    private static final String KEY_LAST_TIME = "tapsss_last_result_time";
+    private static final String KEY_LAST_KEY = "tapsss_last_result_key";
+    /** 本局已安排过「静默自动下一把」，避免同局的第二次 z() 重复重开 */
+    private static final String KEY_RESTART_PENDING = "tapsss_skip_restart_pending";
     /** onResume 是否真的挂上了：显示在模式弹窗里，方便确认「设置返回生效」有没有装 */
     static volatile boolean resumeHooked;
     /** 官方结算拦截（$b.d / $c.z）是否都已挂上：模式弹窗里显示，便于确认补装结果 */
@@ -427,8 +432,9 @@ public final class SchulteHooks {
         Object act = XposedHelpers.getObjectField(listener, "a");
         if (!(act instanceof Activity)) return;
         Activity a = (Activity) act;
-        // 每次完成都清掉上一局的放行标记
+        // 每次完成都清掉上一局的标记
         XposedHelpers.removeAdditionalInstanceField(a, KEY_RESULT_ALLOWED);
+        XposedHelpers.removeAdditionalInstanceField(a, KEY_RESTART_PENDING);
         if (!Prefs.moduleEnabled(a) || !Prefs.autoNextNoRecord(a)) return;
         if (AdvancedSchulte.advCompleting) return;
 
@@ -436,6 +442,10 @@ public final class SchulteHooks {
         int[] parts = officialKeyParts(a);
         if (time <= 0 || parts == null) return;
         String key = "official_best_" + parts[0] + "_" + parts[1] + "_" + parts[2];
+        // 关键：在这里（官方刚算完成绩、计时器还没被下一局重置时）同步缓存本局归属。
+        // $c.z 可能被校时网络请求推迟到下一局开始后才回调，那时现场的计时器/模式已经变了。
+        XposedHelpers.setAdditionalInstanceField(a, KEY_LAST_TIME, Long.valueOf(time));
+        XposedHelpers.setAdditionalInstanceField(a, KEY_LAST_KEY, key);
         long best = Prefs.getLong(a, key, 0L);
         if (best <= 0 || time < best) {
             Prefs.setLong(a, key, time);
@@ -466,35 +476,57 @@ public final class SchulteHooks {
         if (Prefs.advMode(a) != AdvancedSchulte.MODE_OFF) return; // 高级模式走自己的结算
 
         Object allowed = XposedHelpers.getAdditionalInstanceField(a, KEY_RESULT_ALLOWED);
-        if (allowed != null) {
-            XposedHelpers.removeAdditionalInstanceField(a, KEY_RESULT_ALLOWED);
-            MainHook.log("官方模式新纪录，成绩弹窗放行");
-            return;
+        // 优先用 $b.d 缓存的「这一局」的成绩；没有缓存（$b.d 未装上）时再读现场
+        long time;
+        String key;
+        Object cachedTime = XposedHelpers.getAdditionalInstanceField(a, KEY_LAST_TIME);
+        Object cachedKey = XposedHelpers.getAdditionalInstanceField(a, KEY_LAST_KEY);
+        if (cachedTime instanceof Long && cachedKey instanceof String) {
+            time = (Long) cachedTime;
+            key = (String) cachedKey;
+        } else {
+            time = officialTime(a);
+            int[] parts = officialKeyParts(a);
+            if (time <= 0 || parts == null) return;
+            key = "official_best_" + parts[0] + "_" + parts[1] + "_" + parts[2];
         }
-
-        long time = officialTime(a);
-        int[] parts = officialKeyParts(a);
-        if (time <= 0 || parts == null) return;
-        String key = "official_best_" + parts[0] + "_" + parts[1] + "_" + parts[2];
         long best = Prefs.getLong(a, key, 0L);
-        if (best <= 0 || time < best) {
+        if (allowed != null || best <= 0 || time < best) {
             // $b.d 没装上的兜底：这里补记最佳并放行
-            Prefs.setLong(a, key, time);
+            if (best <= 0) Prefs.setLong(a, key, time);
             MainHook.log("官方模式新纪录(" + time + ")，成绩弹窗放行");
             return;
         }
 
         param.setResult(null);
         MainHook.log("官方模式非新纪录(" + time + ">=" + best + ")，不展示成绩，自动下一把");
+        final Activity target = a;
+        if (XposedHelpers.getAdditionalInstanceField(a, KEY_RESTART_PENDING) != null) return;
+        XposedHelpers.setAdditionalInstanceField(a, KEY_RESTART_PENDING, Boolean.TRUE);
         Ui.postDelayed(new Runnable() {
             @Override
             public void run() {
-                nextOfficialRound(a);
+                nextOfficialRound(target);
             }
         }, 150);
     }
 
+    /**
+     * 与官方 $b.d 完全一致：优先取回放里最后一次有效操作的用时，
+     * 没有回放数据时才用计时器当前值（计时器在校时/停表后可能已被下一局重置）。
+     */
     private static long officialTime(Activity a) {
+        try {
+            Object rec = XposedHelpers.getObjectField(a, "i");
+            if (rec != null) {
+                Object last = XposedHelpers.callMethod(rec, "h");
+                if (last != null) {
+                    Object t = XposedHelpers.callMethod(last, "getTime");
+                    if (t instanceof Long && (Long) t > 0) return (Long) t;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         try {
             Object timer = XposedHelpers.getObjectField(a, "e");
             return (Long) XposedHelpers.callMethod(timer, "e");
