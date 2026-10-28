@@ -5,6 +5,7 @@ plugins {
 android {
     namespace 'com.tapsss.lsposed'
     compileSdk 33
+    buildToolsVersion '34.0.0'
 
     defaultConfig {
         applicationId "com.tapsss.lsposed"
