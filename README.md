@@ -1,0 +1,66 @@
+# 扫雷联萌增强（LSPosed 模块）
+
+针对「扫雷联萌」（`com.star.minesweeping`，官网 <http://tapsss.com/>）的 LSPosed 模块。
+适配版本：**3.6.10**（3.6.x 结构一致）。
+
+## 功能
+
+### 舒尔特方格
+
+- **开始倒计时**：可关闭；开启时倒计时时长可调，**下限 1000 毫秒**（默认 3000ms）。
+- **倒计时期间点击不开始**：倒计时进行中点击棋盘不会跳过倒计时直接开局，并弹提示。
+- **阶数弹窗加入模式切换**：点游戏右上角「阶数」按钮，弹窗内可同时切换 **模式**（简单 / 简单·盲打 / 普通 / 普通·盲打 / 混合·简单 / 混合）和 **阶数**（3–10）。
+
+### 账号与登录
+
+- **多设备掉线自动重登（默认开启）**：当同一账号在另一台设备登录、本机被踢回登录页时，自动填入上次保存的账号密码并提交登录。
+- 登录提交时会自动保存账号密码；可在模块设置中清除。
+
+## 安装
+
+1. 安装模块 APK；
+2. 在 LSPosed 管理器中启用「扫雷联萌增强」；
+3. 作用域勾选 **扫雷联萌**（`com.star.minesweeping`）；
+4. 强制停止并重新打开扫雷联萌。
+
+## 使用
+
+进入扫雷联萌 → **设置** → 新增的 **模块设置** 入口：
+
+- 一级：舒尔特方格 / 账号与登录（多设备掉线自动重登）/ 关于；
+- 二级：各功能开关与倒计时时长。
+
+> 舒尔特相关配置在**重新进入游戏**后生效。
+
+## 构建
+
+本地需要 Android SDK（platform 33 + build-tools 34）与 JDK 17：
+
+```bash
+echo "sdk.dir=/path/to/android-sdk" > local.properties
+./gradlew assembleDebug
+```
+
+产物：`app/build/outputs/apk/debug/app-debug.apk`
+
+GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`）。
+
+## 实现说明（适配 3.6.10，类名/字段名为反编译后的混淆名）
+
+| 功能 | Hook 点 |
+| --- | --- |
+| 设置页入口 | `SettingHomeActivity.init()/I()` 后向 adapter（字段 `c`）追加 `GameMenu("ic_setting","模块设置","",true)`；`SettingHomeActivity$a.p(...)` 拦截点击 |
+| 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
+| 倒计时点击拦截 | `SchulteView.onTouchEvent` before：状态 `d.b` 且 `elapsedRealtime()-x < z` 时吞掉 DOWN/POINTER_DOWN |
+| 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮替换点击为自绘弹窗 |
+| 模式切换 | 带 `type`/`blind`/`level` extras 重启 `SchulteGameActivity`（`$$ARouter$$Autowired` 会读取）；仅改阶数时调用原 `W(int)` |
+| 自动重登 | `LoginActivity.L()` before 保存手机号/密码；`LoginActivity.init()` after 自动填入并调用 `L()` |
+
+配置保存在目标应用私有目录 `shared_prefs/tapsss_module.xml`（普通 `SharedPreferences`，Hook 与被 Hook 同进程）。
+
+## 注意
+
+- 目前只做了**舒尔特方格**一个游戏的选项，其他游戏入口后续可扩展。
+- 模块基于 3.6.10 的混淆结构；若 App 大版本更新导致类名/字段变化，Hook 会静默失效（日志 TAG：`TapsssModule`），需要重新适配。
+- 保存的密码以明文存放在扫雷联萌的私有 SharedPreferences 中，仅供自动重登使用；介意的话请在模块设置里清除。
+- 仅供学习交流，请遵守目标软件的服务条款。

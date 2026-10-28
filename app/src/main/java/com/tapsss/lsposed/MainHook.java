@@ -1,0 +1,45 @@
+package com.tapsss.lsposed;
+
+import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.callbacks.XC_LoadPackage;
+
+/**
+ * 模块入口。只作用于扫雷联萌（com.star.minesweeping）。
+ * 三组 Hook 各自 try/catch，避免某一组因目标版本差异失效而影响其余功能。
+ */
+public class MainHook implements IXposedHookLoadPackage {
+
+    public static final String TAG = "TapsssModule";
+    public static final String TARGET_PKG = "com.star.minesweeping";
+
+    @Override
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!TARGET_PKG.equals(lpparam.packageName)) return;
+
+        log("load " + lpparam.packageName + " process=" + lpparam.processName);
+
+        try {
+            SettingsHooks.install(lpparam.classLoader);
+        } catch (Throwable t) {
+            log("SettingsHooks 安装失败: " + t);
+        }
+        try {
+            SchulteHooks.install(lpparam.classLoader);
+        } catch (Throwable t) {
+            log("SchulteHooks 安装失败: " + t);
+        }
+        try {
+            LoginHooks.install(lpparam.classLoader);
+        } catch (Throwable t) {
+            log("LoginHooks 安装失败: " + t);
+        }
+    }
+
+    public static void log(String msg) {
+        try {
+            XposedBridge.log(TAG + ": " + msg);
+        } catch (Throwable ignored) {
+        }
+    }
+}
