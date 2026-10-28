@@ -173,6 +173,23 @@ public final class SchulteHooks {
             }
         }
 
+        // 官方模式：非新纪录也不展示成绩、直接下一把（与高级模式共用同一个开关）
+        Class<?> listenerCls = XposedHelpers.findClassIfExists(ACTIVITY + "$b", cl);
+        if (listenerCls != null) {
+            XposedBridge.hookAllMethods(listenerCls, "d", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        officialAutoNext(param);
+                    } catch (Throwable t) {
+                        MainHook.log("官方模式非新纪录拦截失败: " + t);
+                    }
+                }
+            });
+        } else {
+            MainHook.log("未找到 SchulteGameActivity$b，官方非新纪录拦截不可用");
+        }
+
         // 高级模式（本地记录，不上传）
         try {
             AdvancedSchulte.install(cl);
@@ -311,6 +328,62 @@ public final class SchulteHooks {
             }
         }
         ((View) view).invalidate();
+    }
+
+    /**
+     * 官方模式的「非新纪录不展示成绩，自动下一把」。
+     * 官方成绩弹窗依赖服务器返回（新纪录/排名），所以在完成回调之前用本地记录判断：
+     * 只要不是新纪录就跳过整个官方结算（不显示、不上传），直接下一把。
+     */
+    private static void officialAutoNext(XC_MethodHook.MethodHookParam param) {
+        Object listener = param.thisObject;
+        Object act = XposedHelpers.getObjectField(listener, "a");
+        if (!(act instanceof Activity)) return;
+        final Activity a = (Activity) act;
+        if (!Prefs.moduleEnabled(a) || !Prefs.autoNextNoRecord(a)) return;
+        if (AdvancedSchulte.advCompleting) return;
+
+        Object game = XposedHelpers.getObjectField(a, "g");
+        Object timer = XposedHelpers.getObjectField(a, "e");
+        long time;
+        int level;
+        int type;
+        boolean blind;
+        try {
+            time = (Long) XposedHelpers.callMethod(timer, "e");
+            level = (Integer) XposedHelpers.callMethod(game, "f");
+            type = (Integer) XposedHelpers.callMethod(game, "l");
+            blind = (Boolean) XposedHelpers.callMethod(game, "m");
+        } catch (Throwable t) {
+            return;
+        }
+        if (time <= 0 || level <= 0) return;
+
+        String key = "official_best_" + type + "_" + (blind ? 1 : 0) + "_" + level;
+        long best = Prefs.getLong(a, key, 0L);
+        if (best <= 0 || time < best) {
+            Prefs.setLong(a, key, time);
+            return; // 首次记录或刷新纪录：按官方流程正常显示
+        }
+
+        param.setResult(null);
+        MainHook.log("官方模式非新纪录(" + time + ">=" + best + ")，不展示成绩，自动下一把");
+        Ui.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (!Ui.isAlive(a)) return;
+                try {
+                    XposedHelpers.setAdditionalInstanceField(a, KEY_BYPASS_BUSY, Boolean.TRUE);
+                    try {
+                        XposedHelpers.callMethod(a, "V");
+                    } finally {
+                        XposedHelpers.removeAdditionalInstanceField(a, KEY_BYPASS_BUSY);
+                    }
+                } catch (Throwable t) {
+                    MainHook.log("官方模式自动下一把失败: " + t);
+                }
+            }
+        }, 150);
     }
 
     private static void blockTouchDuringCountdown(XC_MethodHook.MethodHookParam param) {

@@ -40,10 +40,10 @@ public final class AdvancedSchulte {
 
     static final String[] DESCS = {
             "从头点到尾（1→n²），默认模式，即官方的正常模式。",
-            "一眼能看到的数字（比如 1-9）要在 2 秒内点完，错就重开。五阶 1-25 刷成绩的话，"
+            "一眼能看到的数字（比如 1-9）要在 2 秒内点完。五阶 1-25 刷成绩的话，"
                     + "可以后程全猜，但是手速一定要跟上。这种训练方法有助于刷 PB，或者提升视幅阈值"
                     + "（预判时间减少，考验视野幅度），但不助于提升平均实力。\n\n"
-                    + "可设置目标 x（x ≤ 阶数²）：从 1 点到 x，点到了就自动重新来。",
+                    + "可设置目标 x（x ≤ 阶数²）：从 1 点到 x，点到了就自动重新来。点错不重开，会提示应该点哪个。",
             "从 n² 点到 1（n²→1）。可以让人快速进入状态，提升对大数的识别能力和应变能力。"
                     + "如果要打比赛的话可以着重练习这个，并适当增加打乱练习。",
             "归中训练：1→n²→2→n²-1→3→… 与倒序同组，同样可以快速进入状态，"
@@ -67,6 +67,8 @@ public final class AdvancedSchulte {
     static volatile boolean eHooked;
     static volatile boolean jHooked;
     static volatile boolean restartBlocked;
+    /** 正在走官方结算：避免官方完成回调被「非新纪录不展示」二次拦截 */
+    static volatile boolean advCompleting;
     private static volatile String installError = "";
 
     private static final float[] MAX_GAP = {
@@ -328,12 +330,8 @@ public final class AdvancedSchulte {
             syncGame(g, r);
             vibrate(c);
             updateInfo(c, r);
-            if (r.mode == SPEED) {
-                fail(view, r, "点错了，应该点 " + want + "，重开", 700);
-            } else {
-                // 点错不影响进度，但告诉玩家当前应该点哪个数
-                SchulteHooks.toastThrottled(c, "点错了，应该点 " + want);
-            }
+            // 点错不重开，只提示当前应该点哪个数（爆手速也不再因点错重开）
+            SchulteHooks.toastThrottled(c, "点错了，应该点 " + want);
             return;
         }
 
@@ -421,8 +419,58 @@ public final class AdvancedSchulte {
             restart(view, r, 220);
             return;
         }
-        showComplete(act, r, elapsed, best, record);
-        restart(view, r, r.mode == SPEED ? 1300 : 1500);
+        // 成绩显示交给官方：把本局数据写进官方 result helper，再调官方的结算入口，
+        // 这样弹窗样式、新纪录/排名都与官方模式完全一致，不再自绘卡片。
+        if (!showOfficialResult(act, r, elapsed)) {
+            restart(view, r, 900);
+        }
+    }
+
+    /**
+     * 用官方成绩弹窗展示本局：设置官方计时器与统计后直接调用 result.z(true)。
+     * 返回 false 表示官方入口不可用（版本不符），由调用方兜底自动下一把。
+     */
+    private static boolean showOfficialResult(Activity act, Round r, long elapsed) {
+        if (act == null) return false;
+        try {
+            Object game = XposedHelpers.getObjectField(act, "g");
+            Object timer = XposedHelpers.getObjectField(act, "e");
+            Object result = XposedHelpers.getObjectField(act, "j");
+            try {
+                XposedHelpers.callMethod(timer, "l");      // 停表
+            } catch (Throwable ignored) {
+            }
+            XposedHelpers.callMethod(timer, "p", elapsed);
+            XposedHelpers.callMethod(result, "t", elapsed);
+            XposedHelpers.callMethod(result, "u", r.taps);
+            XposedHelpers.callMethod(result, "p", r.taps - r.errors);
+            syncGame(game, r);
+            Object finished = finishedStatus(act);
+            if (finished != null) XposedHelpers.callMethod(game, "u", finished);
+            XposedHelpers.callMethod(game, "r", -1);
+            advCompleting = true;
+            try {
+                XposedHelpers.callMethod(result, "z", Boolean.TRUE);
+            } finally {
+                advCompleting = false;
+            }
+            MainHook.log("高级模式完成，已按官方成绩显示: " + NAMES[r.mode] + " " + elapsed + "ms");
+            return true;
+        } catch (Throwable t) {
+            MainHook.log("高级模式官方结算失败: " + t);
+            return false;
+        }
+    }
+
+    private static Object finishedStatus(Activity act) {
+        try {
+            Class<?> cls = XposedHelpers.findClassIfExists(
+                    "com.star.minesweeping.module.game.schulte.core.d",
+                    act.getClass().getClassLoader());
+            return cls == null ? null : XposedHelpers.getStaticObjectField(cls, "d");
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     private static void fail(Object view, Round r, String why, long restartDelay) {
@@ -431,13 +479,9 @@ public final class AdvancedSchulte {
         Activity act = Ui.findActivity(c);
         stopTimer(act);
         clearPress(view);
-        // 「非新纪录不展示成绩」开启时，失败同样不弹卡片，直接下一把
-        if (Prefs.autoNextNoRecord(c)) {
-            MainHook.log("高级模式失败（不展示）: " + NAMES[r.mode] + " " + why);
-            hideOverlay(act);
-            restart(view, r, 260);
-            return;
-        }
+        // 规则失败提示（1start 反应超时 / max≤N 间隔超时）是提示而不是成绩，
+        // 不受「非新纪录不展示成绩」影响，始终显示
+        MainHook.log("高级模式规则失败: " + NAMES[r.mode] + " " + why);
         showFail(act, r, why);
         restart(view, r, restartDelay);
     }
