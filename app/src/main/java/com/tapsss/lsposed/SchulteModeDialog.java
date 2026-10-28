@@ -1,204 +1,219 @@
 package com.tapsss.lsposed;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.Context;
-import android.content.DialogInterface;
+import android.app.Dialog;
 import android.content.Intent;
-import android.widget.ArrayAdapter;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
-import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.TextView;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * 把游戏右上角的「阶数选择」弹窗替换为「模式 + 阶数」二合一弹窗。
+ * 「模式与阶数」弹窗：直接复用 App 自己的 SquareSizeDialog（com.star.minesweeping.k.b.z3），
+ * 保留原版卡片背景、标题样式和 6 列阶数格子，只在标题下方插入一行模式选择。
  *
- * 模式与 Intent 参数映射（与 SchulteActivity 一致）：
- *   简单(1,false) 简单盲打(1,true) 普通(0,false) 普通盲打(0,true) 混合简单(2,false) 混合(3,false)
- * 切换模式 = 带 type/blind/level extras 重启 SchulteGameActivity（ARouter 注入会读取这些 extras）。
- * 只切换阶数 = 调用原 Activity 的 W(int)，与原版阶数弹窗行为一致。
+ * 原版对话框布局 dialog_square_size：
+ *   CardView > LinearLayout[ RelativeLayout(title_text) , ConstraintLayout(RecyclerView) , FrameLayout(extra_layout) ]
+ * 阶数点击由 z3 内部 dismiss 后回调 z3$b.a(int level)，这里用 Proxy 实现该接口。
  */
 public final class SchulteModeDialog {
 
-    private static final String[] MODE_NAMES = {
-            "简单", "简单·盲打", "普通", "普通·盲打", "混合·简单", "混合"
-    };
-    private static final int[] MODE_TYPE = {1, 1, 0, 0, 2, 3};
-    private static final boolean[] MODE_BLIND = {false, true, false, true, false, false};
-    private static final int MIN_LEVEL = 3;
-    private static final int MAX_LEVEL = 10;
-    private static final int MODE_ID_BASE = 100;
+    private static final String DIALOG = "com.star.minesweeping.k.b.z3";
+    private static final String DIALOG_CALLBACK = "com.star.minesweeping.k.b.z3$b";
+    private static final String BUTTON = "com.star.minesweeping.ui.view.layout.ButtonLayout";
+    private static final String SCHULTE_CONFIG = "com.star.minesweeping.i.c.d.a";
+
+    private static final String[] LABELS = {"简单", "简单·盲打", "普通", "普通·盲打", "混合·简单", "混合"};
+    /** {type, blind}，与前缀模式一一对应 */
+    private static final int[][] MODES = {{1, 0}, {1, 1}, {0, 0}, {0, 1}, {2, 0}, {3, 0}};
 
     private SchulteModeDialog() {
     }
 
-    public static void show(final Activity act) {
+    static void show(final Activity act) {
         if (!Ui.isAlive(act)) return;
+        try {
+            ClassLoader cl = act.getClassLoader();
+            Class<?> dlgCls = XposedHelpers.findClass(DIALOG, cl);
+            Class<?> btnCls = XposedHelpers.findClass(BUTTON, cl);
+            Class<?> cbCls = XposedHelpers.findClass(DIALOG_CALLBACK, cl);
 
-        int curType = getInt(act, "a", 0);
-        boolean curBlind = getBoolean(act, "b", false);
-        int curLevel = getInt(act, "c", 5);
-        if (curLevel < MIN_LEVEL || curLevel > MAX_LEVEL) {
-            curLevel = readGameLevel(act, curLevel);
-        }
+            int curType = readType(act);
+            boolean curBlind = readBlind(act);
+            int curLevel = readLevel(act);
 
-        final Context c = act;
-        LinearLayout root = new LinearLayout(c);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int p = Ui.dp(c, 20);
-        root.setPadding(p, Ui.dp(c, 8), p, Ui.dp(c, 4));
+            final int[] picked = {indexOf(curType, curBlind)};
+            final Object dlg = newInstance(dlgCls, new Class<?>[]{int.class, int.class, int.class},
+                    curLevel, 3, 10);
 
-        root.addView(label(c, "模式"));
-        final RadioGroup modes = new RadioGroup(c);
-        modes.setOrientation(RadioGroup.VERTICAL);
-        int checked = 2; // 默认普通
-        for (int i = 0; i < MODE_NAMES.length; i++) {
-            RadioButton rb = new RadioButton(c);
-            rb.setId(MODE_ID_BASE + i);
-            rb.setText(MODE_NAMES[i]);
-            rb.setPadding(0, Ui.dp(c, 4), 0, Ui.dp(c, 4));
-            modes.addView(rb);
-            if (MODE_TYPE[i] == curType && MODE_BLIND[i] == curBlind) checked = i;
-        }
-        modes.check(MODE_ID_BASE + checked);
-        root.addView(modes);
+            Object binding = XposedHelpers.getObjectField(dlg, "a");
+            View root = (View) XposedHelpers.callMethod(binding, "getRoot");
 
-        root.addView(label(c, "阶数（3 - 10）"));
-        final Spinner levelSpinner = new Spinner(c);
-        String[] levels = new String[MAX_LEVEL - MIN_LEVEL + 1];
-        for (int i = 0; i < levels.length; i++) levels[i] = String.valueOf(MIN_LEVEL + i);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                c, android.R.layout.simple_spinner_item, levels);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        levelSpinner.setAdapter(adapter);
-        levelSpinner.setSelection(curLevel - MIN_LEVEL);
-        root.addView(levelSpinner);
+            TextView title = (TextView) root.findViewById(Ui.resId(act, "title_text", "id"));
+            if (title != null) title.setText("模式与阶数");
 
-        TextView hint = label(c, "切换模式会重新开局；只改阶数会直接重开本局。");
-        hint.setTextSize(12);
-        hint.setAlpha(0.75f);
-        root.addView(hint);
-
-        ScrollView sv = new ScrollView(c);
-        sv.addView(root);
-
-        final int type = curType;
-        final boolean blind = curBlind;
-        final int level = curLevel;
-
-        new AlertDialog.Builder(act)
-                .setTitle("模式与阶数")
-                .setView(sv)
-                .setPositiveButton("应用", new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        try {
-                            apply(act, modes, levelSpinner, type, blind, level);
-                        } catch (Throwable t) {
-                            MainHook.log("应用模式/阶数失败: " + t);
-                            Ui.toast(act, "切换失败：" + t);
+            final View[] chips = new View[LABELS.length];
+            LinearLayout column = new LinearLayout(act);
+            column.setOrientation(LinearLayout.VERTICAL);
+            column.setPadding(Ui.dp(act, 12), Ui.dp(act, 2), Ui.dp(act, 12), Ui.dp(act, 2));
+            for (int row = 0; row < 2; row++) {
+                LinearLayout line = new LinearLayout(act);
+                line.setOrientation(LinearLayout.HORIZONTAL);
+                for (int col = 0; col < 3; col++) {
+                    final int idx = row * 3 + col;
+                    final View chip = (View) newInstance(btnCls,
+                            new Class<?>[]{android.content.Context.class}, act);
+                    XposedHelpers.callMethod(chip, "setRadius", Ui.dp(act, 4));
+                    XposedHelpers.callMethod(chip, "setText", LABELS[idx]);
+                    XposedHelpers.callMethod(chip, "setCommonStyle", idx == picked[0]);
+                    chip.setClickable(true);
+                    chip.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            picked[0] = idx;
+                            for (int i = 0; i < chips.length; i++) {
+                                if (chips[i] != null) {
+                                    XposedHelpers.callMethod(chips[i], "setCommonStyle", i == idx);
+                                }
+                            }
                         }
-                    }
-                })
-                .setNegativeButton("取消", null)
-                .show();
-    }
+                    });
+                    chips[idx] = chip;
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                            0, Ui.dp(act, 42), 1f);
+                    lp.setMargins(Ui.dp(act, 3), Ui.dp(act, 3), Ui.dp(act, 3), Ui.dp(act, 3));
+                    line.addView(chip, lp);
+                }
+                column.addView(line, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
 
-    private static void apply(Activity act, RadioGroup modes, Spinner levelSpinner,
-                              int oldType, boolean oldBlind, int oldLevel) {
-        int id = modes.getCheckedRadioButtonId();
-        int index = id >= MODE_ID_BASE ? id - MODE_ID_BASE : -1;
-        if (index < 0 || index >= MODE_NAMES.length) {
-            Ui.toast(act, "请选择模式");
-            return;
-        }
-        int newType = MODE_TYPE[index];
-        boolean newBlind = MODE_BLIND[index];
-        int newLevel = MIN_LEVEL + levelSpinner.getSelectedItemPosition();
+            FrameLayout extra = (FrameLayout) root.findViewById(Ui.resId(act, "extra_layout", "id"));
+            ViewGroup host = extra == null ? null : (ViewGroup) extra.getParent();
+            if (host instanceof LinearLayout) {
+                // 插到标题和阶数格子之间
+                host.addView(column, 1, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            } else if (extra != null) {
+                callDialogMethod(dlg, "m", new Class<?>[]{View.class, ViewGroup.LayoutParams.class},
+                        column, new FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
 
-        if (newType == oldType && newBlind == oldBlind && newLevel == oldLevel) {
-            Ui.toast(act, "模式与阶数没有变化");
-            return;
-        }
+            Object callback = Proxy.newProxyInstance(cl, new Class<?>[]{cbCls},
+                    new InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy, Method method, Object[] args) {
+                            if (args != null && args.length == 1 && args[0] instanceof Integer) {
+                                apply(act, (Integer) args[0], MODES[picked[0]][0], MODES[picked[0]][1] == 1,
+                                        curType, curBlind, curLevel);
+                            }
+                            return null;
+                        }
+                    });
+            callDialogMethod(dlg, "q", new Class<?>[]{cbCls}, callback);
 
-        if (isBusy(act)) {
-            Ui.toast(act, "游戏进行中，请先结束本局再切换");
-            return;
-        }
-
-        if (newType != oldType || newBlind != oldBlind) {
-            restart(act, newType, newBlind, newLevel);
-            return;
-        }
-
-        // 只改阶数：优先走原版逻辑
-        try {
-            XposedHelpers.callMethod(act, "W", newLevel);
-            Ui.toast(act, "已切换为 " + newLevel + "×" + newLevel);
+            ((Dialog) dlg).show();
         } catch (Throwable t) {
-            restart(act, newType, newBlind, newLevel);
+            MainHook.log("打开模式与阶数弹窗失败: " + t);
+            Ui.toast(act, "打开模式与阶数失败: " + t);
         }
     }
 
-    private static boolean isBusy(Activity act) {
+    private static Object newInstance(Class<?> cls, Class<?>[] types, Object... args) throws Exception {
+        java.lang.reflect.Constructor<?> ctor = cls.getDeclaredConstructor(types);
+        ctor.setAccessible(true);
+        return ctor.newInstance(args);
+    }
+
+    private static void callDialogMethod(Object dlg, String name, Class<?>[] types, Object... args) {
         try {
-            Object busy = XposedHelpers.callMethod(act, "M");
-            return Boolean.TRUE.equals(busy);
+            Method m = XposedHelpers.findMethodExact(dlg.getClass(), name, types);
+            m.setAccessible(true);
+            m.invoke(dlg, args);
+        } catch (Throwable t) {
+            MainHook.log("调用 " + name + " 失败: " + t);
+        }
+    }
+
+    private static void apply(Activity act, int level, int type, boolean blind,
+                              int curType, boolean curBlind, int curLevel) {
+        if (type == curType && blind == curBlind && level == curLevel) return;
+
+        boolean modeChanged = type != curType || blind != curBlind;
+        if (!modeChanged) {
+            // 只改阶数：优先走原版 W(int)，它内部会检查游戏是否进行中
+            try {
+                Object busy = XposedHelpers.callMethod(act, "M");
+                if (!Boolean.TRUE.equals(busy)) {
+                    XposedHelpers.callMethod(act, "W", level);
+                    return;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        try {
+            // 写字段 + 更新 Intent，再重建页面：避免 launchMode=singleTask 下
+            // startActivity 复用旧实例、onNewIntent 不重新读取 type/blind 的问题
+            XposedHelpers.setIntField(act, "a", type);
+            XposedHelpers.setBooleanField(act, "b", blind);
+            XposedHelpers.setIntField(act, "c", level);
+            Intent intent = act.getIntent();
+            if (intent != null) {
+                intent.putExtra("type", type);
+                intent.putExtra("blind", blind);
+                intent.putExtra("level", level);
+            }
+            act.recreate();
+        } catch (Throwable t) {
+            MainHook.log("切换模式失败: " + t);
+            Ui.toast(act, "切换失败: " + t);
+        }
+    }
+
+    private static int indexOf(int type, boolean blind) {
+        for (int i = 0; i < MODES.length; i++) {
+            if (MODES[i][0] == type && (MODES[i][1] == 1) == blind) return i;
+        }
+        return 2; // 兜底：普通
+    }
+
+    private static int readType(Activity act) {
+        try {
+            return XposedHelpers.getIntField(act, "a");
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    private static boolean readBlind(Activity act) {
+        try {
+            return XposedHelpers.getBooleanField(act, "b");
         } catch (Throwable t) {
             return false;
         }
     }
 
-    private static void restart(Activity act, int type, boolean blind, int level) {
-        Intent intent = new Intent(act, act.getClass());
-        intent.putExtra("type", type);
-        intent.putExtra("blind", blind);
-        intent.putExtra("level", level);
-        act.startActivity(intent);
-        act.finish();
-    }
-
-    private static int readGameLevel(Activity act, int fallback) {
+    private static int readLevel(Activity act) {
         try {
-            Object game = XposedHelpers.getObjectField(act, "g");
-            if (game != null) {
-                Object size = XposedHelpers.callMethod(game, "f");
-                if (size instanceof Integer) {
-                    int s = (Integer) size;
-                    if (s >= MIN_LEVEL && s <= MAX_LEVEL) return s;
-                }
-            }
+            int l = XposedHelpers.getIntField(act, "c");
+            if (l >= 3 && l <= 10) return l;
         } catch (Throwable ignored) {
         }
-        if (fallback >= MIN_LEVEL && fallback <= MAX_LEVEL) return fallback;
-        return 5;
-    }
-
-    private static int getInt(Object target, String field, int def) {
         try {
-            return XposedHelpers.getIntField(target, field);
-        } catch (Throwable t) {
-            return def;
+            Class<?> config = XposedHelpers.findClass(SCHULTE_CONFIG, act.getClassLoader());
+            Object l = XposedHelpers.callStaticMethod(config, "h");
+            if (l instanceof Integer) return (Integer) l;
+        } catch (Throwable ignored) {
         }
-    }
-
-    private static boolean getBoolean(Object target, String field, boolean def) {
-        try {
-            return XposedHelpers.getBooleanField(target, field);
-        } catch (Throwable t) {
-            return def;
-        }
-    }
-
-    private static TextView label(Context c, String text) {
-        TextView tv = new TextView(c);
-        tv.setText(text);
-        tv.setPadding(0, Ui.dp(c, 8), 0, 0);
-        return tv;
+        return 3;
     }
 }

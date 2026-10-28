@@ -60,6 +60,42 @@ public final class SchulteHooks {
             } catch (Throwable t) {
                 MainHook.log("onTouchEvent Hook 失败: " + t);
             }
+
+            // 记录倒计时截止时间（i(null) 会开启倒计时），不依赖混淆字段名
+            try {
+                XposedBridge.hookAllMethods(viewCls, "i", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            trackCountdown(param);
+                        } catch (Throwable t) {
+                            MainHook.log("倒计时跟踪失败: " + t);
+                        }
+                    }
+                });
+            } catch (Throwable t) {
+                MainHook.log("i() Hook 失败: " + t);
+            }
+
+            // 兜底：倒计时期间直接拦掉 j(null) 的“跳过倒计时开局”
+            try {
+                XposedBridge.hookAllMethods(viewCls, "j", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            if (param.args.length != 1 || param.args[0] != null) return;
+                            long until = countdownUntil(param.thisObject);
+                            if (until > 0 && SystemClock.elapsedRealtime() + 16 < until) {
+                                param.setResult(null);
+                            }
+                        } catch (Throwable t) {
+                            MainHook.log("j() 拦截失败: " + t);
+                        }
+                    }
+                });
+            } catch (Throwable t) {
+                MainHook.log("j() Hook 失败: " + t);
+            }
         }
 
         Class<?> barCls = XposedHelpers.findClassIfExists(ACTION_BAR, cl);
@@ -94,6 +130,33 @@ public final class SchulteHooks {
         }
     }
 
+    private static final String KEY_UNTIL = "tapsss_countdown_until";
+
+    /** i(null) = 开始倒计时；i(cells) = 恢复/续局，清掉截止时间 */
+    private static void trackCountdown(XC_MethodHook.MethodHookParam param) {
+        Object view = param.thisObject;
+        if (param.args.length != 1) return;
+        Object cells = param.args[0];
+        boolean empty = cells == null
+                || (cells.getClass().isArray() && java.lang.reflect.Array.getLength(cells) == 0);
+        if (!empty) {
+            XposedHelpers.removeAdditionalInstanceField(view, KEY_UNTIL);
+            return;
+        }
+        Context c = ((View) view).getContext();
+        if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c) || !Prefs.countdownEnabled(c)) {
+            XposedHelpers.removeAdditionalInstanceField(view, KEY_UNTIL);
+            return;
+        }
+        XposedHelpers.setAdditionalInstanceField(view, KEY_UNTIL,
+                Long.valueOf(SystemClock.elapsedRealtime() + Prefs.countdownMs(c)));
+    }
+
+    private static long countdownUntil(Object view) {
+        Object v = XposedHelpers.getAdditionalInstanceField(view, KEY_UNTIL);
+        return v instanceof Long ? ((Long) v).longValue() : 0L;
+    }
+
     private static void blockTouchDuringCountdown(XC_MethodHook.MethodHookParam param) {
         Object view = param.thisObject;
         MotionEvent event = (MotionEvent) param.args[0];
@@ -103,19 +166,8 @@ public final class SchulteHooks {
         Context c = ((View) view).getContext();
         if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c) || !Prefs.blockTouch(c)) return;
 
-        if (!XposedHelpers.getBooleanField(view, "y")) return;
-
-        long start = XposedHelpers.getLongField(view, "x");
-        long duration = XposedHelpers.getLongField(view, "z");
-        if (start <= 0 || duration <= 0) return;
-
-        long elapsed = SystemClock.elapsedRealtime() - start;
-        if (elapsed < 0 || elapsed >= duration) return; // 倒计时已结束
-
-        Object game = XposedHelpers.callMethod(view, "getGame");
-        if (game == null) return;
-        Object state = XposedHelpers.callMethod(game, "h");
-        if (!(state instanceof Enum) || !"b".equals(((Enum<?>) state).name())) return;
+        long until = countdownUntil(view);
+        if (until <= 0 || SystemClock.elapsedRealtime() >= until) return; // 不在倒计时中
 
         param.setResult(Boolean.TRUE);
         toastThrottled(c, "倒计时中，点击不会直接开始");

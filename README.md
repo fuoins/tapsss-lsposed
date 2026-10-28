@@ -29,7 +29,7 @@
 
 ## 使用
 
-进入扫雷联萌 → **设置** → 右上角 **齿轮图标**（模块设置）：
+进入扫雷联萌 → **设置** → 「全部游戏」网格里的 **模块设置**：
 
 - 一级：舒尔特方格 / 账号与登录（多设备掉线自动重登）/ 关于；
 - 二级：各功能开关与倒计时时长。
@@ -53,11 +53,11 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 
 | 功能 | Hook 点 |
 | --- | --- |
-| 设置页入口 | `SettingHomeActivity.initActionBar(ActionBar)` 后追加 `ActionBar.c(1, mipmap/ic_setting, ...)` 齿轮按钮，点击打开模块设置 |
+| 设置页入口 | 在「全部游戏」网格（`SettingHomeActivity` 字段 `b` 的适配器）里追加一个 `GameMenu("ic_setting","模块设置")` 并设置 route；`SettingHomeActivity$b.p(...)` 拦截点击打开模块设置。放在 `b` 而不是 `c`，避免混进「快速开始」 |
 | 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
-| 倒计时点击拦截 | `SchulteView.onTouchEvent` before：状态 `d.b` 且 `elapsedRealtime()-x < z` 时吞掉 DOWN/POINTER_DOWN |
-| 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮替换点击为自绘弹窗 |
-| 模式切换 | 带 `type`/`blind`/`level` extras 重启 `SchulteGameActivity`（`$$ARouter$$Autowired` 会读取）；仅改阶数时调用原 `W(int)` |
+| 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底 |
+| 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入一行模式选择 |
+| 模式切换 | 仅改阶数且未在游戏中 → 调原 `W(int)`；否则改写 `a`/`b`/`c` 字段并更新 Intent extras 后 `recreate()`（该页 launchMode=singleTask，restart 会复用旧实例） |
 | 自动重登 | `LoginActivity.L()` before 保存手机号/密码；`LoginActivity.init()` after 自动填入并调用 `L()` |
 
 配置保存在目标应用私有目录 `shared_prefs/tapsss_module.xml`（普通 `SharedPreferences`，Hook 与被 Hook 同进程）。
