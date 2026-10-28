@@ -122,7 +122,9 @@ public final class SchulteModeDialog {
             advTitle.getPaint().setFakeBoldText(true);
             advHeader.addView(advTitle);
             TextView advHint = new TextView(act);
-            advHint.setText("成绩仅本地记录 · 点 i 看说明");
+            // 版本 + 接管状态：一眼确认装的是哪版、Hook 有没有真的生效
+            advHint.setText("v" + MainHook.VERSION + " · "
+                    + AdvancedSchulte.statusText() + " · 点 i 看说明");
             advHint.setTextSize(10);
             advHint.setAlpha(0.55f);
             advHint.setGravity(Gravity.END);
@@ -260,9 +262,10 @@ public final class SchulteModeDialog {
                             apply(act, (Dialog) dlg, applied, 0, false, applied[2], refreshAdv);
                             Ui.toast(act, "高级模式使用普通棋盘，已关闭盲玩");
                         } else {
-                            // 立即重置本局：否则要等下一次点击才触发重开，看起来像「点一下就重开」
-                            AdvancedSchulte.resetRound(act);
-                            Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]);
+                            // 切到高级模式不要清盘：当前棋盘直接接着用，
+                            // 下一次点击才按新模式现场起局（否则会表现为「点一下就重开」）
+                            Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]
+                                    + " · " + AdvancedSchulte.statusText());
                         }
                     }
                 });

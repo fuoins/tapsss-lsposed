@@ -63,6 +63,12 @@ public final class AdvancedSchulte {
     private static final String KEY_ROUND = "tapsss_adv_round";
     static final String KEY_OVERLAY_TAG = "tapsss_adv_overlay";
 
+    /** 安装结果：在模式弹窗里显示，方便确认当前运行的是哪版代码、Hook 是否真的生效 */
+    static volatile boolean eHooked;
+    static volatile boolean jHooked;
+    static volatile boolean restartBlocked;
+    private static volatile String installError = "";
+
     private static final float[] MAX_GAP = {
             0f, 0f, 0f, 0.1f, 0.2f, 0.25f, 0.4f, 0.75f, 1.0f, 1.75f, 3.0f};
     private static final long START1_LIMIT_MS = 450L;
@@ -94,24 +100,34 @@ public final class AdvancedSchulte {
     static void install(ClassLoader cl) {
         Class<?> viewCls = XposedHelpers.findClassIfExists(VIEW, cl);
         if (viewCls == null) {
+            installError = "找不到 SchulteView";
             MainHook.log("高级模式：未找到 SchulteView");
             return;
         }
 
+        XC_MethodHook tap = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                try {
+                    onTap(param);
+                } catch (Throwable t) {
+                    MainHook.log("高级模式点击失败: " + t);
+                }
+            }
+        };
         try {
-            XposedHelpers.findAndHookMethod(viewCls, "e", int.class, int.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                onTap(param);
-                            } catch (Throwable t) {
-                                MainHook.log("高级模式点击失败: " + t);
-                            }
-                        }
-                    });
+            XposedHelpers.findAndHookMethod(viewCls, "e", int.class, int.class, tap);
+            eHooked = true;
         } catch (Throwable t) {
-            MainHook.log("高级模式 e() Hook 失败: " + t);
+            // 版本差异导致签名不一致时，退化为按方法名接管
+            try {
+                XposedBridge.hookAllMethods(viewCls, "e", tap);
+                eHooked = true;
+                MainHook.log("高级模式 e() 按名兜底接管（签名不符）");
+            } catch (Throwable t2) {
+                installError = "e() 接管失败";
+                MainHook.log("高级模式 e() Hook 失败: " + t);
+            }
         }
 
         try {
@@ -132,14 +148,17 @@ public final class AdvancedSchulte {
                         Object view = param.thisObject;
                         Object prev = XposedHelpers.getAdditionalInstanceField(view, KEY_PREV_STATUS);
                         XposedHelpers.removeAdditionalInstanceField(view, KEY_PREV_STATUS);
-                        if (!"b".equals(prev)) return;              // 之前不是 Ready，本局早已开始
-                        if (!"c".equals(statusName(game(view)))) return; // 这次 j 被拦下或未开局
+                        // 注意：SchulteStatus 的枚举常量名是 Normal/Ready/Gaming/Finished，
+                        // 不是混淆后的字段名 b/c。这里必须用 name()，否则永远不会开局。
+                        if (!"Ready".equals(prev)) return;           // 之前不是 Ready，本局早已开始
+                        if (!"Gaming".equals(statusName(game(view)))) return; // 这次 j 被拦下或未开局
                         startRound(view);
                     } catch (Throwable t) {
                         MainHook.log("高级模式开局失败: " + t);
                     }
                 }
             });
+            jHooked = true;
         } catch (Throwable t) {
             MainHook.log("高级模式 j() Hook 失败: " + t);
         }
@@ -180,35 +199,60 @@ public final class AdvancedSchulte {
             }
             try {
                 XposedHelpers.findAndHookMethod(helperCls, "b", int.class, block);
+                restartBlocked = true;
             } catch (Throwable t) {
                 MainHook.log("高级模式屏蔽错误重开失败: " + t);
             }
         }
     }
 
+    /** 模式弹窗里展示的一行状态：能直接确认运行版本与接管是否成功 */
+    static String statusText() {
+        if (eHooked && jHooked) {
+            return "已接管" + (restartBlocked ? "" : "（重开拦截未装）");
+        }
+        StringBuilder sb = new StringBuilder("未接管");
+        if (!eHooked) sb.append("·e");
+        if (!jHooked) sb.append("·j");
+        if (installError.length() > 0) sb.append("：").append(installError);
+        return sb.toString();
+    }
+
     // ------------------------------------------------------------------ 点击接管
 
     private static void onTap(XC_MethodHook.MethodHookParam param) {
+        if (param.args.length != 2
+                || !(param.args[0] instanceof Integer) || !(param.args[1] instanceof Integer)) {
+            return; // 签名不符（按名兜底接管时）：交回 App 处理
+        }
         Object view = param.thisObject;
         Context c = ((View) view).getContext();
         if (!Prefs.moduleEnabled(c)) return;
         int mode = Prefs.advMode(c);
         if (mode == MODE_OFF) return;
-        param.setResult(null); // 跳过 App 原始处理（不会触发官方结算/上传）
 
         Round r = round(view);
-        if (r == null || r.mode != mode || r.done) {
-            // 对局不是当前模式（刚切换过模式/刚结算完）：直接重开一局
-            restartNow(view);
+        if (r != null && r.done) {           // 刚结算完，等自动下一把：吞掉多余点击
+            param.setResult(null);
             return;
         }
-        handleTap(view, (Integer) param.args[0], (Integer) param.args[1]);
+        if (r != null && r.mode != mode) {   // 切换过模式但本局还是旧模式
+            XposedHelpers.removeAdditionalInstanceField(view, KEY_ROUND);
+            r = null;
+        }
+        if (r == null) {
+            // 关键：不再「重开一局」，而是就用当前棋盘现场起一局高级模式，
+            // 彻底去掉「切换模式后点一下就重开」的表现
+            r = startRound(view);
+            if (r == null) return;           // 未接管（如 1start 不支持当前阶数）：交回 App
+        }
+        param.setResult(null); // 跳过 App 原始处理（不会触发官方结算/上传）
+        handleTap(view, r, (Integer) param.args[0], (Integer) param.args[1]);
     }
 
     /**
-     * 在切到高级模式的瞬间就重置本局：
-     * 否则下一次点击会走到 onTap 的「对局模式不匹配 → 重开」兜底，
-     * 表现为「点一下就重开」。
+     * 在切到高级模式的瞬间就重置本局（回到「准备」），
+     * 让新模式下从干净的一局开始。即使这里失败，onTap 也会用当前棋盘现场起局，不会再重开。
      */
     static void resetRound(Activity act) {
         if (act == null) return;
@@ -255,11 +299,10 @@ public final class AdvancedSchulte {
         }
     }
 
-    private static void handleTap(Object view, int row, int col) {
-        Round r = round(view);
+    private static void handleTap(Object view, Round r, int row, int col) {
         if (r == null || r.done) return;
         Context c = ((View) view).getContext();
-        if (!Prefs.moduleEnabled(c) || Prefs.advMode(c) != r.mode) return;
+        if (!Prefs.moduleEnabled(c)) return;
 
         Object g = game(view);
         if (g == null) return;
@@ -319,20 +362,20 @@ public final class AdvancedSchulte {
         if (found >= r.x) complete(view, r, now);
     }
 
-    private static void startRound(Object view) {
+    private static Round startRound(Object view) {
         Context c = ((View) view).getContext();
-        if (!Prefs.moduleEnabled(c)) return;
+        if (!Prefs.moduleEnabled(c)) return null;
         int mode = Prefs.advMode(c);
-        if (mode == MODE_OFF) return;
+        if (mode == MODE_OFF) return null;
 
         Object g = game(view);
-        if (g == null) return;
+        if (g == null) return null;
         int n = (Integer) XposedHelpers.callMethod(g, "f");
 
         if (mode == START1 && (n < 3 || n > 5)) {
             Prefs.setAdvMode(c, MODE_OFF);
             Ui.toast(c, "1start 训练仅支持 3-5 阶，已切回顺序模式");
-            return;
+            return null;
         }
 
         Round r = new Round();
@@ -353,6 +396,7 @@ public final class AdvancedSchulte {
             MainHook.log("高级模式初始化棋盘失败: " + t);
         }
         updateInfo(c, r);
+        return r;
     }
 
     // ------------------------------------------------------------------ 结算 / 失败

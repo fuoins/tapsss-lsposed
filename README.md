@@ -5,7 +5,7 @@
 
 ## 下载
 
-已构建的 APK：[v1.0.0 release](https://github.com/fuoins/tapsss-lsposed/releases/latest)
+已构建的 APK：[v1.0.9 release](https://github.com/fuoins/tapsss-lsposed/releases/latest)
 
 ## 功能
 
@@ -24,8 +24,9 @@
   - **1start 训练**：仅 3–5 阶，开局点 1 的反应必须 ≤ 0.45 秒，否则重开。
   - 每个模式旁有 `i`，点击查看训练说明。
 - **非新纪录不展示成绩，自动下一把（可关闭）**：高级模式每局结束若没刷新本模式/本阶数的本地纪录（含失败/点错），不显示成绩直接开始下一局；关掉后每局都会显示成绩或失败原因。
-- **切换高级模式立即重开**：在阶数弹窗里点高级模式会立刻重置本局，不会等到下一次点击才重开。
-- **设置返回即生效**：从「舒尔特设置」返回游戏页会重新读取 App 配置（倒计时开关/时长等），无需退出游戏页重进。
+- **切换高级模式不清盘**：在阶数弹窗里点高级模式不会重置当前棋盘，下一次点击就直接按新模式开始，不会出现「点一下就重开」。
+- **设置返回即生效**：从「舒尔特设置」返回游戏页会重新读取 App 配置（倒计时开关/时长等），并在「准备」状态按最新值重新开始倒计时，无需退出游戏页重进。
+- **接管状态可见**：模式弹窗里「高级模式」右侧会显示当前版本与 Hook 接管状态（如 `v1.0.9 · 已接管`），用来确认模块确实生效。
 - **倒计时取消下限限制**：舒尔特倒计时时长可设为 0（不等待），不再受 App 自带的毫秒下限限制。
 - **重开预设**：默认启用。
 
@@ -46,7 +47,7 @@
 进入扫雷联萌 → **设置** → 最顶部的 **模块设置** 区块：
 
 - 舒尔特方格 / 账号与登录两个入口，右侧「…」打开完整菜单（含关于）；
-- 舒尔特改动需重新进入游戏生效。
+- 舒尔特改动从设置页返回即生效；若模式弹窗显示「未接管」，请先在 LSPosed 里确认作用域已勾选，并强制停止后重开游戏。
 
 ## 构建
 
@@ -69,7 +70,7 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 | 舒尔特功能页 | 设置页 `SettingSchulteStartActivity.init()` 后替换「倒计时时长」输入框的 NumberInterceptor 下限为 0（限舒尔特页生效）；功能开关/时长均跟随 App 自带设置 |
 | 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底；开关来自模块设置 |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入官方模式 + 高级模式 + 目标 x，底部追加「舒尔特设置」「模块设置」文字按钮 |
-| 高级模式 | `SchulteView.e(row,col)` before 完全接管点击（不触发官方 listener，因此不结算/不上传）；`SchulteView.j(cells=null)` after 记录开局（Ready→Gaming）并开新一局；`SchulteView.i(null)` after 清空对局；`i.c.d.c.a.d(long)/b(int)` 屏蔽官方重开预设；每局结束/失败向 `android.R.id.content` 叠加一层效果层后调 `SchulteGameActivity.V()`（用 `M()` bypass 标记绕过「游戏进行中」判断）自动下一把 |
+| 高级模式 | `SchulteView.e(row,col)` before 完全接管点击（不触发官方 listener，因此不结算/不上传）；`SchulteView.j(cells=null)` after 记录开局（`SchulteStatus` 枚举常量名是 `Normal/Ready/Gaming/Finished`，判断状态必须用 `name()`，不能用混淆字段名 `b/c`）并开新一局；`SchulteView.i(null)` after 清空对局；`i.c.d.c.a.d(long)/b(int)` 屏蔽官方重开预设；每局结束/失败向 `android.R.id.content` 叠加一层效果层后调 `SchulteGameActivity.V()`（用 `M()` bypass 标记绕过「游戏进行中」判断）自动下一把 |
 | 快速开始入口 | 进程启动（`MinesweeperApplication.onCreate`）时把 `GameMenu("ic_setting","模块设置")` 写进快速开始列表（KV `utils.h.i`），并在「全部游戏」网格里注入同款格子；点格子可像其它游戏一样增删（`$b.p` 拦截 → 改 KV 列表 + 刷新）；点快速开始里的图标打开面板（`$a.p` 拦截 + `ActionRouter.go` 兜底） |
 | 模式切换 | 改 `Intent` 的 `type`/`blind`/`level` extras 后 `recreate()`，让 ARouter 重新注入字段并重建模式控制器 `i.c.d.c.a`；只改阶数时仍调原 `W(int)`（用一次性标记绕过 `M()` 的「游戏进行中」判断） |
 | 自动重登 | `LoginActivity.L()` before 保存手机号/密码；`LoginActivity.init()` after 自动填入并调用 `L()` |

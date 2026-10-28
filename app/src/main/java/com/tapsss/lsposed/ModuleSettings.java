@@ -53,6 +53,7 @@ public final class ModuleSettings {
         root.addView(cbAutoNext);
         root.addView(hint(c, "勾选后：高级模式每局结束若没有刷新纪录（含失败/点错），不展示成绩直接下一把"));
         root.addView(hint(c, "关掉后：每局结束都会显示成绩或失败原因"));
+        root.addView(hint(c, "注意：某个模式/阶数/目标 x 的第一次完成一定算新纪录，会正常显示"));
 
         root.addView(feature(c, "高级模式（顺序/爆手速/倒序/归中/max≤N/1start，成绩仅本地记录，不上传）"));
         root.addView(feature(c, "右上角阶数弹窗增强"));
@@ -129,12 +130,15 @@ public final class ModuleSettings {
     private static void showAbout(final Activity act) {
         LinearLayout root = vertical(act);
         TextView tv = new TextView(act);
-        tv.setText("扫雷联萌增强 v1.0.7\n\n"
+        tv.setText("扫雷联萌增强 v" + MainHook.VERSION + "\n\n"
                 + "· 舒尔特功能：倒计时期间点击不直接开始（可关闭）、"
                 + "右上角阶数弹窗内直接切换模式与高级模式、倒计时时长下限取消（可设为 0）、重开预设\n"
                 + "· 高级模式：顺序 / 爆手速（可设目标 x）/ 倒序 / 归中 / max≤N / 1start，"
                 + "成绩只在本地记录、不上传；每局结束有独立效果，可开启「非新纪录不展示成绩，自动下一把」\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
+                + "模式弹窗里「高级模式」右侧会显示 v" + MainHook.VERSION + " 与接管状态；\n"
+                + "若显示「未接管」，请在 LSPosed 里确认作用域勾选「扫雷联萌」，"
+                + "安装后强制停止并重新打开游戏。\n\n"
                 + "适用版本：扫雷联萌 3.6.x\n"
                 + "使用方式：在 LSPosed 中启用模块，作用域勾选「扫雷联萌」，"
                 + "然后进入 App 的「设置」→「模块设置」。");

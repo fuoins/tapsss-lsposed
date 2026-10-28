@@ -54,6 +54,18 @@ public final class SchulteHooks {
             try {
                 XposedBridge.hookAllMethods(viewCls, "i", new XC_MethodHook() {
                     @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        // 每次开局（i(null) 会开一轮新的倒计时）都先重读 App 配置，
+                        // 这样从「舒尔特设置」改完倒计时返回后，下一局立刻用新值，
+                        // 不依赖 Activity 的 onResume 是否被调到
+                        if (param.args.length != 1 || param.args[0] != null) return;
+                        try {
+                            XposedHelpers.callMethod(param.thisObject, "reload");
+                        } catch (Throwable ignored) {
+                        }
+                    }
+
+                    @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         try {
                             trackCountdown(param);
@@ -254,7 +266,9 @@ public final class SchulteHooks {
                 }
             } catch (Throwable ignored) {
             }
-            if ((wasEnabled != enabled || wasMs != ms) && ready(game)) {
+            // 只要当前/之前开着倒计时，就在「准备」状态按最新值重新开始倒计时，
+            // 这样从设置页返回立刻看到新时长，而不是等下一局或退出重进
+            if (ready(game) && (enabled || wasEnabled)) {
                 XposedHelpers.callMethod(view, "h");
             }
         }
@@ -264,7 +278,8 @@ public final class SchulteHooks {
     private static boolean ready(Object game) {
         try {
             Object status = XposedHelpers.callMethod(game, "h");
-            return status instanceof Enum && "b".equals(((Enum<?>) status).name());
+            // SchulteStatus 的枚举常量名是 Normal/Ready/Gaming/Finished（不是字段名 b/c）
+            return status instanceof Enum && "Ready".equals(((Enum<?>) status).name());
         } catch (Throwable t) {
             return false;
         }

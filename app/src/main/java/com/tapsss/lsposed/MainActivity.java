@@ -17,7 +17,7 @@ public class MainActivity extends Activity {
         tv.setPadding(p, p, p, p);
         tv.setTextSize(16);
         tv.setLineSpacing(0, 1.35f);
-        tv.setText("扫雷联萌增强 v1.0.0\n\n"
+        tv.setText("扫雷联萌增强 v" + MainHook.VERSION + "\n\n"
                 + "这是一个 LSPosed 模块，不是独立应用。\n\n"
                 + "使用步骤：\n"
                 + "1. 在 LSPosed 管理器中启用本模块；\n"
