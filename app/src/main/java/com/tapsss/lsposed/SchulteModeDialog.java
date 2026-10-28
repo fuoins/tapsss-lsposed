@@ -215,6 +215,12 @@ public final class SchulteModeDialog {
                     xWrap.setVisibility(adv[0] == AdvancedSchulte.SPEED
                             ? View.VISIBLE : View.GONE);
                     int total = applied[2] * applied[2];
+                    // 换阶数后目标 x 的上限跟着变：超了压回新上限并同步到输入框
+                    int saved = Prefs.advX(act);
+                    if (saved > total) {
+                        Prefs.setAdvX(act, total);
+                        xInput.setText(String.valueOf(total));
+                    }
                     xInput.setHint("留空 = 全部 " + total);
                 }
             };
@@ -257,16 +263,10 @@ public final class SchulteModeDialog {
                         Prefs.setAdvMode(act, idx);
                         refreshAdv.run();
                         if (idx == AdvancedSchulte.MODE_OFF) return;
-                        // 高级模式需要全部数字可见：盲玩时切回普通模式（会重建本局）
-                        if (applied[1] == 1) {
-                            apply(act, (Dialog) dlg, applied, 0, false, applied[2], refreshAdv);
-                            Ui.toast(act, "高级模式使用普通棋盘，已关闭盲玩");
-                        } else {
-                            // 切到高级模式不要清盘：当前棋盘直接接着用，
-                            // 下一次点击才按新模式现场起局（否则会表现为「点一下就重开」）
-                            Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]
-                                    + " · " + AdvancedSchulte.statusText());
-                        }
+                        // 高级模式是在当前官方模式（简单/普通/打乱/盲玩）之上叠加出题规则，
+                        // 不清盘、也不改官方棋盘设置；下一次点击才按新模式现场起局
+                        Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]
+                                + " · " + AdvancedSchulte.statusText());
                     }
                 });
                 TextView info = advInfos[i];
@@ -567,6 +567,8 @@ public final class SchulteModeDialog {
             applied[0] = type;
             applied[1] = blind ? 1 : 0;
             applied[2] = level;
+            // 阶数变了：目标 x 的上限/hint 立刻按新阶数刷新
+            if (levelChanged && refreshAdv != null) refreshAdv.run();
             if (modeChanged) {
                 Ui.toast(act, "已切换为 " + LABELS[indexOf(type, blind)]);
             }

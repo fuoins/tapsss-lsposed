@@ -162,6 +162,7 @@ public final class SchulteHooks {
             for (Class<?> c = actCls; c != null && c != Object.class; c = c.getSuperclass()) {
                 try {
                     XposedHelpers.findAndHookMethod(c, "onResume", reload);
+                    resumeHooked = true;
                     break;
                 } catch (NoSuchMethodError e) {
                     // 往上找声明 onResume 的父类
@@ -181,6 +182,9 @@ public final class SchulteHooks {
     }
 
     static final String KEY_BYPASS_BUSY = "tapsss_bypass_busy";
+    /** onResume 是否真的挂上了：显示在模式弹窗里，方便确认「设置返回生效」有没有装 */
+    static volatile boolean resumeHooked;
+    private static final String KEY_LAST_CONFIG = "tapsss_last_config";
     private static final String ACTIVITY =
             "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
     private static final String RANGE = "com.star.minesweeping.k.b.h4.l";
@@ -239,9 +243,9 @@ public final class SchulteHooks {
     }
 
     /**
-     * 从设置页回到游戏页：SchulteView 只在构造时读过一次 KV，这里重读一遍；
-     * 若倒计时开关/时长有变化且当前处于「准备」状态，再调 h()(=i(null)) 按新值重新倒计时，
-     * 不用退出游戏页重进。
+     * 从设置页回到游戏页：SchulteView 只在构造时读过一次 KV，这里重读一遍。
+     * 只要发现阶数/倒计时开关/时长与上次不同，就直接按最新设置重建一局 ——
+     * 从「舒尔特设置」改完返回时立刻生效，不用退出游戏页重进。
      */
     private static void reloadViewConfig(Object act) {
         Object binding = XposedHelpers.getObjectField(act, "view");
@@ -249,40 +253,64 @@ public final class SchulteHooks {
         Object view = XposedHelpers.getObjectField(binding, "T");
         if (!(view instanceof View)) return;
 
-        boolean wasEnabled = XposedHelpers.getBooleanField(view, "y");
-        long wasMs = XposedHelpers.getLongField(view, "z");
         XposedHelpers.callMethod(view, "reload");
-        boolean enabled = XposedHelpers.getBooleanField(view, "y");
-        long ms = XposedHelpers.getLongField(view, "z");
 
         Object game = XposedHelpers.getObjectField(act, "g");
-        if (game != null) {
-            try {
-                Class<?> configCls = XposedHelpers.findClassIfExists(SCHULTE_CONFIG,
-                        act.getClass().getClassLoader());
-                if (configCls != null) {
-                    Object config = XposedHelpers.callStaticMethod(configCls, "c");
-                    if (config != null) XposedHelpers.callMethod(game, "q", config);
-                }
-            } catch (Throwable ignored) {
+        if (game == null) return;
+        try {
+            Class<?> configCls = XposedHelpers.findClassIfExists(SCHULTE_CONFIG,
+                    act.getClass().getClassLoader());
+            if (configCls != null) {
+                Object config = XposedHelpers.callStaticMethod(configCls, "c");
+                if (config != null) XposedHelpers.callMethod(game, "q", config);
             }
-            // 只要当前/之前开着倒计时，就在「准备」状态按最新值重新开始倒计时，
-            // 这样从设置页返回立刻看到新时长，而不是等下一局或退出重进
-            if (ready(game) && (enabled || wasEnabled)) {
-                XposedHelpers.callMethod(view, "h");
+        } catch (Throwable ignored) {
+        }
+
+        boolean enabled = XposedHelpers.getBooleanField(view, "y");
+        long ms = XposedHelpers.getLongField(view, "z");
+        int level = 0;
+        try {
+            level = (Integer) XposedHelpers.callMethod(game, "f");
+            Class<?> configCls = XposedHelpers.findClassIfExists(SCHULTE_CONFIG,
+                    act.getClass().getClassLoader());
+            if (configCls != null) {
+                Object lv = XposedHelpers.callStaticMethod(configCls, "h");
+                if (lv instanceof Integer && (Integer) lv >= 3 && (Integer) lv <= 10) {
+                    level = (Integer) lv;
+                }
+            }
+        } catch (Throwable t) {
+            MainHook.log("读取最新阶数失败: " + t);
+        }
+
+        String now = level + "|" + enabled + "|" + ms;
+        Object last = XposedHelpers.getAdditionalInstanceField(act, KEY_LAST_CONFIG);
+        XposedHelpers.setAdditionalInstanceField(act, KEY_LAST_CONFIG, now);
+        // 第一次 onResume 只记录基线；配置没变也不打断（例如从后台切回来）
+        if (!(last instanceof String) || last.equals(now)) {
+            ((View) view).invalidate();
+            return;
+        }
+
+        MainHook.log("返回游戏页配置变化 " + last + " -> " + now + "，按新设置重建本局");
+        try {
+            XposedHelpers.setAdditionalInstanceField(act, KEY_BYPASS_BUSY, Boolean.TRUE);
+            try {
+                XposedHelpers.callMethod(act, "W", level);
+            } finally {
+                XposedHelpers.removeAdditionalInstanceField(act, KEY_BYPASS_BUSY);
+            }
+        } catch (Throwable t) {
+            MainHook.log("按新设置重建本局失败: " + t);
+            if (enabled) {
+                try {
+                    XposedHelpers.callMethod(view, "h");
+                } catch (Throwable ignored) {
+                }
             }
         }
         ((View) view).invalidate();
-    }
-
-    private static boolean ready(Object game) {
-        try {
-            Object status = XposedHelpers.callMethod(game, "h");
-            // SchulteStatus 的枚举常量名是 Normal/Ready/Gaming/Finished（不是字段名 b/c）
-            return status instanceof Enum && "Ready".equals(((Enum<?>) status).name());
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     private static void blockTouchDuringCountdown(XC_MethodHook.MethodHookParam param) {

@@ -209,7 +209,8 @@ public final class AdvancedSchulte {
     /** 模式弹窗里展示的一行状态：能直接确认运行版本与接管是否成功 */
     static String statusText() {
         if (eHooked && jHooked) {
-            return "已接管" + (restartBlocked ? "" : "（重开拦截未装）");
+            return "已接管·重读" + (SchulteHooks.resumeHooked ? "✓" : "✗")
+                    + (restartBlocked ? "" : "（重开拦截未装）");
         }
         StringBuilder sb = new StringBuilder("未接管");
         if (!eHooked) sb.append("·e");
@@ -322,11 +323,17 @@ public final class AdvancedSchulte {
         r.taps++;
 
         if (value != expected(r)) {
+            int want = expected(r);
             r.errors++;
             syncGame(g, r);
             vibrate(c);
             updateInfo(c, r);
-            if (r.mode == SPEED) fail(view, r, "点错，重开", 700);
+            if (r.mode == SPEED) {
+                fail(view, r, "点错了，应该点 " + want + "，重开", 700);
+            } else {
+                // 点错不影响进度，但告诉玩家当前应该点哪个数
+                SchulteHooks.toastThrottled(c, "点错了，应该点 " + want);
+            }
             return;
         }
 
@@ -386,15 +393,9 @@ public final class AdvancedSchulte {
         r.lastCorrectAt = r.startAt;
         XposedHelpers.setAdditionalInstanceField(view, KEY_ROUND, r);
 
-        // 高级模式统一使用普通棋盘：全部数字可见、不盲玩
-        try {
-            XposedHelpers.callMethod(g, "y", 0);
-            XposedHelpers.callMethod(g, "o", false);
-            XposedHelpers.callMethod(view, "setBlind", false);
-            ((View) view).invalidate();
-        } catch (Throwable t) {
-            MainHook.log("高级模式初始化棋盘失败: " + t);
-        }
+        // 高级模式是在「当前官方模式」的基础上叠加出题顺序规则，
+        // 不强制改成普通棋盘：简单/普通/打乱/盲玩都保持用户当前选择。
+        ((View) view).invalidate();
         updateInfo(c, r);
         return r;
     }
