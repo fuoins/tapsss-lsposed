@@ -1,10 +1,7 @@
 package com.tapsss.lsposed;
 
 import android.app.Activity;
-import android.app.Dialog;
 import android.content.Context;
-import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,7 +27,7 @@ import de.robv.android.xposed.XposedHelpers;
  *
  * 排名页：把「三个杠」里的模式收纳改成顶部两排横向标签
  * （第一排官方模式，第二排高级模式）；选到高级模式时用本地记录渲染榜单（只有自己）。
- * 本地记录页：在抽屉里加一个「高级模式」入口，点开是模块自己的本地记录列表。
+ * 本地记录页：顶部加「官方记录 / 高级模式」标签，选高级模式时列表切换成本地记录。
  */
 public final class AdvancedPages {
 
@@ -38,16 +35,20 @@ public final class AdvancedPages {
             "com.star.minesweeping.ui.activity.rank.RankSchulteActivity";
     private static final String LOCAL_ACT =
             "com.star.minesweeping.ui.activity.user.career.CareerSchulteLocalActivity";
-    private static final String TEXT_ITEM = "com.star.minesweeping.ui.view.text.TextItem";
 
     private static final String TAG_MODE_ROW = "tapsss_adv_mode_row";
     private static final String TAG_ADV_ROW = "tapsss_adv_adv_row";
     private static final String TAG_PANEL = "tapsss_adv_rank_panel";
     private static final String TAG_PANEL_HEADER = "tapsss_adv_rank_header";
     private static final String TAG_PANEL_LIST = "tapsss_adv_rank_list";
-    private static final String TAG_LOCAL_ENTRY = "tapsss_adv_local_entry";
+    private static final String TAG_LOCAL_TABS = "tapsss_adv_local_tabs";
+    private static final String TAG_LOCAL_PANEL = "tapsss_adv_local_panel";
+    private static final String TAG_LOCAL_PANEL_HEADER = "tapsss_adv_local_header";
+    private static final String TAG_LOCAL_PANEL_LIST = "tapsss_adv_local_list";
 
     private static final String KEY_ADV_SEL = "tapsss_adv_rank_sel";
+    private static final String KEY_LOCAL_SEL = "tapsss_adv_local_sel";
+    private static final String KEY_LOCAL_VIEWS = "tapsss_adv_local_views";
 
     /** 与「三个杠」弹窗里的顺序一致 */
     private static final String[] MODE_LABELS = {
@@ -58,6 +59,8 @@ public final class AdvancedPages {
     /** 第一位是「不使用高级模式」（官方榜单） */
     private static final String[] ADV_LABELS = {
             "无", "爆手速", "倒序", "归中", "max≤N", "1start"};
+
+    private static final String[] LOCAL_LABELS = {"官方记录", "高级模式"};
 
     private static volatile boolean rankHooked;
     private static volatile boolean localHooked;
@@ -209,9 +212,16 @@ public final class AdvancedPages {
 
     private static void listenPageChange(Activity act, View pager) {
         try {
-            Class<?> cls = XposedHelpers.findClass(
-                    "androidx.viewpager.widget.ViewPager$OnPageChangeListener",
-                    act.getClassLoader());
+            // 接口类名被混淆过，不能按名字找；从 addOnPageChangeListener 的参数类型取
+            Class<?> cls = null;
+            for (Method m : pager.getClass().getMethods()) {
+                if ("addOnPageChangeListener".equals(m.getName())
+                        && m.getParameterTypes().length == 1) {
+                    cls = m.getParameterTypes()[0];
+                    break;
+                }
+            }
+            if (cls == null || !cls.isInterface()) return;
             final Activity activity = act;
             Object listener = Proxy.newProxyInstance(act.getClassLoader(),
                     new Class<?>[]{cls}, new InvocationHandler() {
@@ -254,17 +264,30 @@ public final class AdvancedPages {
             View advRow = appBar.findViewWithTag(TAG_ADV_ROW);
             if (advRow instanceof ViewGroup) applyChipState((ViewGroup) advRow, adv);
 
-            View panel = ensurePanel(act, root);
+            View panel = ensurePanel(act, root, pager, appBar);
             boolean local = adv > 0;
             pager.setVisibility(local ? View.GONE : View.VISIBLE);
             panel.setVisibility(local ? View.VISIBLE : View.GONE);
-            if (local) fillRankPanel(act, panel, pager, type, blind, adv);
+            if (local) {
+                // 面板必须和 ViewPager 占同一块位置（AppBarLayout 下方），
+                // 否则会盖住顶部两排模式标签
+                ViewGroup.LayoutParams lp = panel.getLayoutParams();
+                if (lp instanceof ViewGroup.MarginLayoutParams) {
+                    int top = Math.max(0, appBar.getHeight());
+                    ((ViewGroup.MarginLayoutParams) lp).topMargin = top;
+                    if (root.getHeight() > 0) {
+                        lp.height = Math.max(Ui.dp(act, 80), root.getHeight() - top);
+                    }
+                    panel.setLayoutParams(lp);
+                }
+                fillRankPanel(act, panel, pager, type, blind, adv);
+            }
         } catch (Throwable t) {
             MainHook.log("排名页刷新失败: " + t);
         }
     }
 
-    private static View ensurePanel(Activity act, ViewGroup root) {
+    private static View ensurePanel(Activity act, ViewGroup root, View pager, View appBar) {
         View old = root.findViewWithTag(TAG_PANEL);
         if (old != null) return old;
 
@@ -277,7 +300,7 @@ public final class AdvancedPages {
         header.setTag(TAG_PANEL_HEADER);
         header.setTextSize(14);
         header.getPaint().setFakeBoldText(true);
-        header.setTextColor(color(act, "theme", 0xFF3F51B5));
+        header.setTextColor(color(act, "dark", 0xFF333333));
         header.setPadding(Ui.dp(act, 16), Ui.dp(act, 12), Ui.dp(act, 16), Ui.dp(act, 8));
         panel.addView(header, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -291,25 +314,30 @@ public final class AdvancedPages {
         panel.addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // 直接复用 ViewPager 的 LayoutParams 类型（构造函数不接受类名字符串：
+        // APK 里 androidx 的类名被 R8 混淆过，按名字找不到 CoordinatorLayout$LayoutParams）
+        int top = appBar.getHeight() > 0 ? appBar.getHeight() : Ui.dp(act, 84);
+        int height;
+        if (root.getHeight() > 0) {
+            height = Math.max(Ui.dp(act, 80), root.getHeight() - top);
+        } else {
+            height = ViewGroup.LayoutParams.MATCH_PARENT;
+        }
+        ViewGroup.LayoutParams lp = null;
         try {
-            ClassLoader cl = act.getClassLoader();
-            Class<?> lpCls = XposedHelpers.findClass(
-                    "androidx.coordinatorlayout.widget.CoordinatorLayout$LayoutParams", cl);
-            Object lp = XposedHelpers.newInstance(lpCls,
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-            try {
-                Class<?> behCls = XposedHelpers.findClass(
-                        "com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior", cl);
-                XposedHelpers.callMethod(lp, "setBehavior", XposedHelpers.newInstance(behCls));
-            } catch (Throwable ignored) {
-            }
-            XposedHelpers.callMethod(root, "addView", panel, lp);
+            Class<?> lpCls = pager.getLayoutParams().getClass();
+            lp = (ViewGroup.LayoutParams) lpCls.getConstructor(int.class, int.class)
+                    .newInstance(ViewGroup.LayoutParams.MATCH_PARENT, height);
         } catch (Throwable t) {
-            // 兜底：直接叠在内容区上，避免盖住标签栏时崩溃
-            ViewGroup.LayoutParams lp = new ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-            root.addView(panel, lp);
-            MainHook.log("排名页本地榜单布局兜底: " + t);
+            MainHook.log("排名页本地榜单布局失败: " + t);
+        }
+        if (lp instanceof ViewGroup.MarginLayoutParams) {
+            ((ViewGroup.MarginLayoutParams) lp).topMargin = top;
+        }
+        if (lp != null) {
+            root.addView(panel, root.indexOfChild(pager) + 1, lp);
+        } else {
+            root.addView(panel);
         }
         panel.setVisibility(View.GONE);
         return panel;
@@ -433,7 +461,9 @@ public final class AdvancedPages {
     }
 
     private static View chipRow(Context c, String[] labels, int selected, Pick pick) {
-        final int accent = color(c, "theme", 0xFF3F51B5);
+        // 与总成绩那排 SlidingTabLayout 一致：选中 @color/dark 加粗 + 15dp 下划线，
+        // 未选中 @color/normal（之前用 theme 在部分主题下是白色，看着像没选中）
+        final int accent = color(c, "dark", 0xFF333333);
         HorizontalScrollView scroll = new HorizontalScrollView(c);
         scroll.setHorizontalScrollBarEnabled(false);
         scroll.setBackgroundColor(color(c, "foreground", 0xFFFFFFFF));
@@ -452,7 +482,7 @@ public final class AdvancedPages {
 
             TextView tv = new TextView(c);
             tv.setText(labels[i]);
-            tv.setTextSize(13);
+            tv.setTextSize(14);
             tv.setSingleLine(true);
             tv.setGravity(Gravity.CENTER);
             chip.addView(tv, new LinearLayout.LayoutParams(
@@ -460,8 +490,8 @@ public final class AdvancedPages {
 
             View line = new View(c);
             LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(c, 2));
-            llp.setMargins(Ui.dp(c, 8), 0, Ui.dp(c, 8), 0);
+                    Ui.dp(c, 15), Ui.dp(c, 2.5f));
+            llp.setMargins(Ui.dp(c, 8), 0, Ui.dp(c, 8), Ui.dp(c, 4));
             chip.addView(line, llp);
 
             Chip holder = new Chip();
@@ -490,134 +520,142 @@ public final class AdvancedPages {
             if (!(tag instanceof Chip)) continue;
             Chip chip = (Chip) tag;
             boolean on = i == selected;
-            chip.text.setTextColor(on ? chip.accent : 0xFF888888);
+            chip.text.setTextColor(on ? chip.accent : color(row.getContext(), "normal", 0xFF888888));
             chip.text.getPaint().setFakeBoldText(on);
             chip.line.setBackgroundColor(on ? chip.accent : 0x00000000);
         }
     }
 
-    // ------------------------------------------------------------------ 本地页入口
+    // ------------------------------------------------------------------ 本地记录页
 
     private static void decorateLocal(Activity act) {
-        Object binding = XposedHelpers.getObjectField(act, "view");
-        if (binding == null) return;
-        Object drawer = XposedHelpers.getObjectField(binding, "a0");
-        if (drawer == null) return;
-        Object filter = XposedHelpers.getObjectField(drawer, "R");
-        if (!(filter instanceof View)) return;
-        View filterView = (View) filter;
-        ViewGroup parent = filterView.getParent() instanceof ViewGroup
-                ? (ViewGroup) filterView.getParent() : null;
-        if (parent == null || parent.findViewWithTag(TAG_LOCAL_ENTRY) != null) return;
-
-        Class<?> itemCls = XposedHelpers.findClassIfExists(TEXT_ITEM, act.getClassLoader());
-        if (itemCls == null) return;
-        Object item;
         try {
-            java.lang.reflect.Constructor<?> ctor = itemCls.getConstructor(
-                    Context.class, android.util.AttributeSet.class);
-            item = ctor.newInstance(act, null);
+            Object binding = XposedHelpers.getObjectField(act, "view");
+            if (binding == null) return;
+            Object recyclerObj = XposedHelpers.getObjectField(binding, "b0");
+            Object headerObj = XposedHelpers.getObjectField(binding, "U");
+            if (!(recyclerObj instanceof View) || !(headerObj instanceof View)) return;
+            View recycler = (View) recyclerObj;
+            View header = (View) headerObj;
+            ViewGroup content = recycler.getParent() instanceof ViewGroup
+                    ? (ViewGroup) recycler.getParent() : null;
+            if (content == null) return;
+
+            if (content.findViewWithTag(TAG_LOCAL_TABS) == null) {
+                Object editObj = XposedHelpers.getObjectField(binding, "W");
+                View edit = editObj instanceof View ? (View) editObj : null;
+                View divider = content.getChildAt(content.indexOfChild(header) + 1);
+
+                final Activity activity = act;
+                View tabs = chipRow(act, LOCAL_LABELS, 0, new Pick() {
+                    @Override
+                    public void onPick(int index) {
+                        selectLocal(activity, index);
+                    }
+                });
+                ((ViewGroup) tabs).getChildAt(0).setTag(TAG_LOCAL_TABS);
+                content.addView(tabs, 0, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(act, 42)));
+
+                LinearLayout panel = buildLocalPanel(act);
+                panel.setVisibility(View.GONE);
+                content.addView(panel, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+                XposedHelpers.setAdditionalInstanceField(act, KEY_LOCAL_VIEWS,
+                        new Object[]{header, divider, recycler, edit, panel});
+                MainHook.log("本地记录页已加高级模式标签");
+            }
+            selectLocal(act, localSel(act));
         } catch (Throwable t) {
-            MainHook.log("本地页高级模式入口创建失败: " + t);
-            return;
+            MainHook.log("本地记录页高级模式标签失败: " + t);
         }
-        XposedHelpers.callMethod(item, "setText", "高级模式");
-        XposedHelpers.callMethod(item, "setValue", "仅本机");
-        XposedHelpers.callMethod(item, "setArrow", Boolean.TRUE);
-        int bg = Ui.resId(act, "layout_selector_drawer", "drawable");
-        if (bg != 0) {
-            try {
-                XposedHelpers.callMethod(item, "setBackground", bg);
-            } catch (Throwable ignored) {
-            }
-        }
-        View itemView = (View) item;
-        itemView.setTag(TAG_LOCAL_ENTRY);
-        final Activity activity = act;
-        itemView.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                showRecords(activity);
-            }
-        });
-        parent.addView(itemView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        MainHook.log("本地页已加高级模式入口");
     }
 
-    private static void showRecords(Activity act) {
-        Dialog dialog = new Dialog(act);
-        LinearLayout root = new LinearLayout(act);
-        root.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(color(act, "background", 0xFFF7F7F7));
-        bg.setCornerRadius(Ui.dp(act, 12));
-        root.setBackground(bg);
-        root.setPadding(Ui.dp(act, 16), Ui.dp(act, 16), Ui.dp(act, 16), Ui.dp(act, 10));
+    private static int localSel(Activity act) {
+        Object sel = XposedHelpers.getAdditionalInstanceField(act, KEY_LOCAL_SEL);
+        return sel instanceof Integer ? (Integer) sel : 0;
+    }
 
-        List<AdvStore.Rec> recs = AdvStore.all(act);
-        AdvStore.sortByNewest(recs);
+    private static void selectLocal(Activity act, int index) {
+        try {
+            Object binding = XposedHelpers.getObjectField(act, "view");
+            Object recyclerObj = XposedHelpers.getObjectField(binding, "b0");
+            View recycler = recyclerObj instanceof View ? (View) recyclerObj : null;
+            Object[] views = (Object[]) XposedHelpers.getAdditionalInstanceField(
+                    act, KEY_LOCAL_VIEWS);
+            if (recycler == null || views == null) return;
+            ViewGroup content = recycler.getParent() instanceof ViewGroup
+                    ? (ViewGroup) recycler.getParent() : null;
+            if (content == null) return;
 
-        TextView title = new TextView(act);
-        title.setText("高级模式记录（仅本机）");
-        title.setTextSize(16);
-        title.getPaint().setFakeBoldText(true);
-        title.setTextColor(color(act, "normal", 0xFF333333));
-        root.addView(title);
+            XposedHelpers.setAdditionalInstanceField(act, KEY_LOCAL_SEL, index);
+            View tabRow = content.findViewWithTag(TAG_LOCAL_TABS);
+            if (tabRow instanceof ViewGroup) applyChipState((ViewGroup) tabRow, index);
 
-        TextView summary = new TextView(act);
-        summary.setText("共 " + recs.size() + " 条，不会上传服务器");
-        summary.setTextSize(11);
-        summary.setTextColor(0xFF888888);
-        summary.setPadding(0, Ui.dp(act, 4), 0, Ui.dp(act, 8));
-        root.addView(summary);
+            boolean adv = index > 0;
+            setVisible(views[0], !adv);       // 表头
+            setVisible(views[1], !adv);       // 分隔线
+            setVisible(views[2], !adv);       // 官方记录列表
+            if (views[3] != null) setVisible(views[3], false);
+            View panel = (View) views[4];
+            setVisible(panel, adv);
+            if (adv) fillLocalPanel(act, panel);
+        } catch (Throwable t) {
+            MainHook.log("本地记录页切换失败: " + t);
+        }
+    }
+
+    private static void setVisible(Object v, boolean visible) {
+        if (v instanceof View) ((View) v).setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    private static LinearLayout buildLocalPanel(Activity act) {
+        LinearLayout panel = new LinearLayout(act);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setTag(TAG_LOCAL_PANEL);
+
+        TextView header = new TextView(act);
+        header.setTag(TAG_LOCAL_PANEL_HEADER);
+        header.setTextSize(13);
+        header.setTextColor(color(act, "normal", 0xFF888888));
+        header.setPadding(Ui.dp(act, 16), Ui.dp(act, 10), Ui.dp(act, 16), Ui.dp(act, 10));
+        panel.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         ScrollView scroll = new ScrollView(act);
         LinearLayout list = new LinearLayout(act);
         list.setOrientation(LinearLayout.VERTICAL);
+        list.setTag(TAG_LOCAL_PANEL_LIST);
         scroll.addView(list, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(scroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(act, 360)));
+        panel.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return panel;
+    }
 
-        SimpleDateFormat fmt = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA);
+    private static void fillLocalPanel(Activity act, View panel) {
+        TextView header = (TextView) panel.findViewWithTag(TAG_LOCAL_PANEL_HEADER);
+        LinearLayout list = (LinearLayout) panel.findViewWithTag(TAG_LOCAL_PANEL_LIST);
+        if (header == null || list == null) return;
+        List<AdvStore.Rec> recs = AdvStore.all(act);
+        AdvStore.sortByNewest(recs);
+        header.setText("高级模式记录（仅本机） · 共 " + recs.size() + " 条 · 不会上传服务器");
+
+        list.removeAllViews();
         if (recs.isEmpty()) {
             TextView empty = new TextView(act);
-            empty.setText("还没有记录");
-            empty.setTextColor(0xFF999999);
+            empty.setText("还没有高级模式记录，先去玩一局吧");
             empty.setTextSize(13);
+            empty.setTextColor(0xFF999999);
             empty.setGravity(Gravity.CENTER);
-            empty.setPadding(0, Ui.dp(act, 30), 0, 0);
+            empty.setPadding(0, Ui.dp(act, 40), 0, 0);
             list.addView(empty);
-        } else {
-            int max = Math.min(recs.size(), 300);
-            for (int i = 0; i < max; i++) {
-                list.addView(recordRow(act, recs.get(i), fmt));
-            }
+            return;
         }
-
-        TextView close = new TextView(act);
-        close.setText("关闭");
-        close.setTextSize(15);
-        close.setGravity(Gravity.CENTER);
-        close.setTextColor(color(act, "theme", 0xFF3F51B5));
-        close.setPadding(0, Ui.dp(act, 12), 0, Ui.dp(act, 6));
-        close.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dialog.dismiss();
-            }
-        });
-        root.addView(close, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        dialog.setContentView(root);
-        dialog.show();
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setBackgroundDrawable(new ColorDrawable(0x00000000));
-            int width = (int) (act.getResources().getDisplayMetrics().widthPixels * 0.92f);
-            dialog.getWindow().setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        SimpleDateFormat fmt = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA);
+        int max = Math.min(recs.size(), 300);
+        for (int i = 0; i < max; i++) list.addView(recordRow(act, recs.get(i), fmt));
     }
 
     private static View recordRow(Activity act, AdvStore.Rec rec, SimpleDateFormat fmt) {
