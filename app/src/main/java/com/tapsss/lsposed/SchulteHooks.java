@@ -177,6 +177,13 @@ public final class SchulteHooks {
                     } catch (Throwable t) {
                         MainHook.log("返回游戏页刷新配置失败: " + t);
                     }
+                    // 每次回到游戏页都补装一次：进来得早时类可能还没加载完，
+                    // 之前漏装的 Hook 在这里按需补上（install 内部已做幂等保护）
+                    try {
+                        AdvancedSchulte.ensureInstalled((Activity) param.thisObject);
+                    } catch (Throwable t) {
+                        MainHook.log("高级模式补装失败: " + t);
+                    }
                 }
             };
             for (Class<?> c = actCls; c != null && c != Object.class; c = c.getSuperclass()) {
@@ -195,46 +202,76 @@ public final class SchulteHooks {
 
         // 官方模式：非新纪录也不展示成绩、直接下一把（与高级模式共用同一个开关）。
         // 两层保险：$b.d 记录本局是否新纪录，$c.z（官方成绩弹窗 + 上传入口）真正拦截
-        Class<?> listenerCls = XposedHelpers.findClassIfExists(ACTIVITY + "$b", cl);
-        if (listenerCls != null) {
-            XposedBridge.hookAllMethods(listenerCls, "d", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    try {
-                        officialAutoNext(param);
-                    } catch (Throwable t) {
-                        MainHook.log("官方模式非新纪录记账失败: " + t);
-                    }
-                }
-            });
-        } else {
-            MainHook.log("未找到 SchulteGameActivity$b，官方非新纪录拦截不可用");
-        }
-        Class<?> resultCls = XposedHelpers.findClassIfExists(ACTIVITY + "$c", cl);
-        if (resultCls != null) {
-            try {
-                XposedHelpers.findAndHookMethod(resultCls, "z", boolean.class, new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        try {
-                            officialResultGuard(param);
-                        } catch (Throwable t) {
-                            MainHook.log("官方成绩弹窗拦截失败: " + t);
-                        }
-                    }
-                });
-            } catch (Throwable t) {
-                MainHook.log("SchulteGameActivity$c.z Hook 失败: " + t);
-            }
-        } else {
-            MainHook.log("未找到 SchulteGameActivity$c，官方成绩弹窗拦截不可用");
-        }
+        installOfficialHooks(cl);
 
         // 高级模式（本地记录，不上传）
         try {
             AdvancedSchulte.install(cl);
         } catch (Throwable t) {
             MainHook.log("AdvancedSchulte 安装失败: " + t);
+        }
+    }
+
+    /**
+     * 官方结算的两个拦截（$b.d / $c.z）单独抽出：类由 App 自己懒加载，
+     * 首次安装可能还没被加载，之后 onResume 会通过 ensureOfficialHooks 补装。
+     */
+    static void installOfficialHooks(ClassLoader cl) {
+        if (officialHooked) return;
+        Class<?> listenerCls = XposedHelpers.findClassIfExists(ACTIVITY + "$b", cl);
+        if (!cbHooked) {
+            if (listenerCls != null) {
+                try {
+                    XposedBridge.hookAllMethods(listenerCls, "d", new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                officialAutoNext(param);
+                            } catch (Throwable t) {
+                                MainHook.log("官方模式非新纪录记账失败: " + t);
+                            }
+                        }
+                    });
+                    cbHooked = true;
+                } catch (Throwable t) {
+                    MainHook.log("$b.d Hook 失败: " + t);
+                }
+            } else {
+                MainHook.log("未找到 SchulteGameActivity$b，稍后重试");
+            }
+        }
+        Class<?> resultCls = XposedHelpers.findClassIfExists(ACTIVITY + "$c", cl);
+        if (!resultHooked) {
+            if (resultCls != null) {
+                try {
+                    XposedHelpers.findAndHookMethod(resultCls, "z", boolean.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                officialResultGuard(param);
+                            } catch (Throwable t) {
+                                MainHook.log("官方成绩弹窗拦截失败: " + t);
+                            }
+                        }
+                    });
+                    resultHooked = true;
+                } catch (Throwable t) {
+                    MainHook.log("SchulteGameActivity$c.z Hook 失败: " + t);
+                }
+            } else {
+                MainHook.log("未找到 SchulteGameActivity$c，稍后重试");
+            }
+        }
+        officialHooked = cbHooked && resultHooked;
+    }
+
+    /** 幂等补装：只在没装全时重试，避免每次 onResume 都重复挂 Hook */
+    static void ensureOfficialHooks(ClassLoader cl) {
+        if (officialHooked) return;
+        try {
+            installOfficialHooks(cl);
+        } catch (Throwable t) {
+            MainHook.log("官方结算拦截补装失败: " + t);
         }
     }
 
@@ -245,6 +282,10 @@ public final class SchulteHooks {
     private static final String KEY_RESULT_ALLOWED = "tapsss_result_allowed";
     /** onResume 是否真的挂上了：显示在模式弹窗里，方便确认「设置返回生效」有没有装 */
     static volatile boolean resumeHooked;
+    /** 官方结算拦截（$b.d / $c.z）是否都已挂上：模式弹窗里显示，便于确认补装结果 */
+    static volatile boolean officialHooked;
+    private static volatile boolean cbHooked;
+    private static volatile boolean resultHooked;
     private static final String KEY_LAST_CONFIG = "tapsss_last_config";
     private static final String ACTIVITY =
             "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
@@ -399,6 +440,11 @@ public final class SchulteHooks {
         if (best <= 0 || time < best) {
             Prefs.setLong(a, key, time);
             XposedHelpers.setAdditionalInstanceField(a, KEY_RESULT_ALLOWED, Boolean.TRUE);
+            if (best <= 0) {
+                // 该模式/阶数还没有本地最佳：官方必然按新纪录展示。
+                // 提示一下，避免误以为「非新纪录不展示」没生效（下一把起就会静默）。
+                toastThrottled(a, "该模式首次成绩已记为最佳，之后非新纪录会静默");
+            }
             MainHook.log("官方模式新纪录(" + time + ")，按官方流程展示");
             return;
         }

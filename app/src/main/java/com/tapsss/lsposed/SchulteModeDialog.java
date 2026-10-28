@@ -206,6 +206,47 @@ public final class SchulteModeDialog {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             column.addView(xWrap);
 
+            // max≤N 的间隔上限（ms，仅 max≤N 显示；留空用内置参考值）
+            final LinearLayout gapRow = new LinearLayout(act);
+            gapRow.setOrientation(LinearLayout.HORIZONTAL);
+            gapRow.setGravity(Gravity.CENTER_VERTICAL);
+            gapRow.setPadding(Ui.dp(act, 3), Ui.dp(act, 4), Ui.dp(act, 3), 0);
+            TextView gapLabel = new TextView(act);
+            gapLabel.setText("间隔 N");
+            gapLabel.setTextSize(12);
+            gapLabel.setAlpha(0.85f);
+            gapRow.addView(gapLabel, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            final EditText gapInput = new EditText(act);
+            gapInput.setSingleLine(true);
+            gapInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+            gapInput.setTextSize(14);
+            gapInput.setTextColor(textColor);
+            gapInput.setHintTextColor(tint | 0x66000000);
+            gapInput.setPadding(Ui.dp(act, 8), 0, Ui.dp(act, 8), 0);
+            GradientDrawable gapBg = new GradientDrawable();
+            gapBg.setColor(tint | 0x1F000000);
+            gapBg.setCornerRadius(Ui.dp(act, 4));
+            gapInput.setBackground(gapBg);
+            int savedGap = Prefs.advMaxGapMs(act);
+            if (savedGap > 0) gapInput.setText(String.valueOf(savedGap));
+            LinearLayout.LayoutParams gapInputLp = new LinearLayout.LayoutParams(
+                    0, Ui.dp(act, 36), 1f);
+            gapInputLp.leftMargin = Ui.dp(act, 8);
+            gapRow.addView(gapInput, gapInputLp);
+            TextView gapUnit = new TextView(act);
+            gapUnit.setText("ms");
+            gapUnit.setTextSize(12);
+            gapUnit.setAlpha(0.7f);
+            gapUnit.setPadding(Ui.dp(act, 6), 0, 0, 0);
+            gapRow.addView(gapUnit, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            final LinearLayout gapWrap = new LinearLayout(act);
+            gapWrap.setOrientation(LinearLayout.VERTICAL);
+            gapWrap.addView(gapRow, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            column.addView(gapWrap);
+
             final Runnable refreshAdv = new Runnable() {
                 @Override
                 public void run() {
@@ -213,6 +254,8 @@ public final class SchulteModeDialog {
                         styleCell(act, advChips[i], i == adv[0]);
                     }
                     xWrap.setVisibility(adv[0] == AdvancedSchulte.SPEED
+                            ? View.VISIBLE : View.GONE);
+                    gapWrap.setVisibility(adv[0] == AdvancedSchulte.MAXN
                             ? View.VISIBLE : View.GONE);
                     int total = applied[2] * applied[2];
                     // 换阶数后目标 x 的上限跟着变：超了压回新上限并同步到输入框
@@ -222,6 +265,8 @@ public final class SchulteModeDialog {
                         xInput.setText(String.valueOf(total));
                     }
                     xInput.setHint("留空 = 全部 " + total);
+                    gapInput.setHint("留空 = 内置 "
+                            + AdvancedSchulte.fmt(AdvancedSchulte.builtinMaxGapMs(applied[2])));
                 }
             };
             refreshAdv.run();
@@ -246,6 +291,27 @@ public final class SchulteModeDialog {
                     if (v < 0) v = 0;
                     int max = Math.max(1, applied[2] * applied[2]);
                     Prefs.setAdvX(act, Math.min(v, max));
+                }
+            });
+
+            gapInput.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence s, int a, int b, int c) {
+                }
+
+                @Override
+                public void afterTextChanged(Editable s) {
+                    int v;
+                    try {
+                        v = s.length() == 0 ? 0 : Integer.parseInt(s.toString());
+                    } catch (Throwable t) {
+                        return;
+                    }
+                    Prefs.setAdvMaxGapMs(act, Math.min(Math.max(v, 0), 60000));
                 }
             });
 
@@ -561,6 +627,8 @@ public final class SchulteModeDialog {
                     XposedHelpers.callMethod(game, "o", blind);
                 }
                 XposedHelpers.callMethod(act, "W", level);
+                // W() 只改棋盘，不会回写 Activity 的阶数字段；不写会导致下次打开弹窗仍显示旧阶数
+                XposedHelpers.setIntField(act, "c", level);
             } finally {
                 XposedHelpers.removeAdditionalInstanceField(act, SchulteHooks.KEY_BYPASS_BUSY);
             }
@@ -602,6 +670,17 @@ public final class SchulteModeDialog {
     }
 
     private static int readLevel(Activity act) {
+        // 以棋盘当前的真实阶数为准：W(int) 切阶数时只改 core.b，不会回写 Activity.c
+        try {
+            Object game = XposedHelpers.getObjectField(act, "g");
+            if (game != null) {
+                Object l = XposedHelpers.callMethod(game, "f");
+                if (l instanceof Integer && (Integer) l >= 3 && (Integer) l <= 10) {
+                    return (Integer) l;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         try {
             int l = XposedHelpers.getIntField(act, "c");
             if (l >= 3 && l <= 10) return l;

@@ -19,6 +19,8 @@ public final class Prefs {
     public static final String TILE_SEEDED = "module_tile_seeded";
     public static final String ADV_MODE = "schulte_adv_mode";
     public static final String ADV_X = "schulte_adv_x";
+    /** max≤N：自定义两数最大间隔（毫秒），0 = 用内置参考值 */
+    public static final String ADV_MAX_GAP_MS = "schulte_adv_max_gap_ms";
     public static final String AUTO_NEXT_NO_RECORD = "schulte_auto_next_no_record";
 
     private static volatile SharedPreferences sp;
@@ -102,6 +104,17 @@ public final class Prefs {
     public static void setAdvX(Context c, int x) {
         SharedPreferences p = get(c);
         if (p != null) p.edit().putInt(ADV_X, x).apply();
+    }
+
+    /** max≤N 的自定义间隔（毫秒），0 表示用内置参考表 */
+    public static int advMaxGapMs(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_MAX_GAP_MS, 0);
+    }
+
+    public static void setAdvMaxGapMs(Context c, int ms) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_MAX_GAP_MS, Math.max(0, ms)).apply();
     }
 
     /** 非新纪录时不展示成绩，直接自动下一把 */
