@@ -1,7 +1,9 @@
 package com.tapsss.lsposed;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
 import android.view.Gravity;
@@ -13,6 +15,9 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.Locale;
 
 import de.robv.android.xposed.XC_MethodHook;
@@ -57,7 +62,10 @@ public final class AdvancedSchulte {
     private static final String ACTIVITY =
             "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
     private static final String RESTART_HELPER = "com.star.minesweeping.i.c.d.c.a";
-    private static final String VIBRATE_HELPER = "com.star.minesweeping.utils.n.e";
+    private static final String SUCCESS =
+            "com.star.minesweeping.data.api.game.schulte.SchulteSuccess";
+    private static final String RESULT_DIALOG = "com.star.minesweeping.k.b.n4.o";
+    private static final String RESULT_LISTENER = "com.star.minesweeping.k.b.n4.o$c";
 
     private static final String KEY_PREV_STATUS = "tapsss_adv_prev_status";
     private static final String KEY_ROUND = "tapsss_adv_round";
@@ -89,6 +97,9 @@ public final class AdvancedSchulte {
         int mode;
         int n;
         int x;
+        /** 官方 type：1/2（简单、简单打乱）点过的格子会消失，0/3（普通、普通打乱）不会 */
+        int type;
+        boolean hides;
         long startAt;
         long lastCorrectAt;
         int idx;
@@ -320,15 +331,18 @@ public final class AdvancedSchulte {
         } catch (Throwable t) {
             return;
         }
+        // 简单/简单打乱：官方会把点过的格子直接抹掉（模块置 0），再点已消失的格子不再计数
+        if (r.hides && value <= 0) return;
 
         long now = SystemClock.elapsedRealtime();
         r.taps++;
 
-        if (value != expected(r)) {
-            int want = expected(r);
+        int want = expected(r);
+        if (value != want) {
             r.errors++;
+            // 计数先同步给 game，官方回调里读的是 game 的统计
             syncGame(g, r);
-            vibrate(c);
+            officialWrong(g, value, want);   // 官方错误音效 / 震动 / TTS / 记录，全部跟随 App 设置
             updateInfo(c, r);
             // 点错不重开，只提示当前应该点哪个数（爆手速也不再因点错重开）
             SchulteHooks.toastThrottled(c, "点错了，应该点 " + want);
@@ -341,12 +355,20 @@ public final class AdvancedSchulte {
         if (found == 1) r.reaction = now - r.startAt;
         if (gap > r.maxGap) r.maxGap = gap;
 
-        try {
-            XposedHelpers.setIntField(view, "r", value);
-            ((View) view).invalidate();
-        } catch (Throwable ignored) {
+        if (r.hides) {
+            // 官方 onDraw 用「格子值 <= progress」决定隐藏；倒序/归中下 progress 与已点数字不对应，
+            // 因此把点过的格子值置 0、progress 固定 0 —— 消失的永远是刚点的那一个
+            setCellValue(cells, row, col, 0);
+            clearPress(view);
+        } else {
+            try {
+                XposedHelpers.setIntField(view, "r", value);
+                ((View) view).invalidate();
+            } catch (Throwable ignored) {
+            }
         }
         syncGame(g, r);
+        officialRight(g, r, cells);      // 官方正确音效 + 进度显示，跟随 App 设置
         updateInfo(c, r);
 
         if (r.mode == MAXN && found > 1) {
@@ -387,12 +409,19 @@ public final class AdvancedSchulte {
         r.mode = mode;
         r.n = n;
         r.x = target(mode, n, Prefs.advX(c));
+        try {
+            r.type = (Integer) XposedHelpers.callMethod(g, "l");
+        } catch (Throwable ignored) {
+            r.type = 0;
+        }
+        r.hides = r.type == 1 || r.type == 2;
         r.startAt = SystemClock.elapsedRealtime();
         r.lastCorrectAt = r.startAt;
         XposedHelpers.setAdditionalInstanceField(view, KEY_ROUND, r);
 
         // 高级模式是在「当前官方模式」的基础上叠加出题顺序规则，
         // 不强制改成普通棋盘：简单/普通/打乱/盲玩都保持用户当前选择。
+        syncGame(g, r);
         ((View) view).invalidate();
         updateInfo(c, r);
         return r;
@@ -405,71 +434,97 @@ public final class AdvancedSchulte {
         Context c = ((View) view).getContext();
         Activity act = Ui.findActivity(c);
         long elapsed = Math.max(0L, now - r.startAt);
+        // 与官方 SchulteRecorder.l() 完全一致：每点错一次成绩 +1s
+        long shown = elapsed + (long) (r.taps - r.idx) * 1000L;
         String key = bestKey(r.mode, r.n, r.x);
         long best = Prefs.getLong(c, key, 0L);
-        boolean record = best <= 0 || elapsed < best;
-        if (record) Prefs.setLong(c, key, elapsed);
+        boolean record = best <= 0 || shown < best;
+        if (record) Prefs.setLong(c, key, shown);
         MainHook.log("高级模式完成: " + NAMES[r.mode] + " n=" + r.n + " x=" + r.x
-                + " elapsed=" + elapsed + " best=" + best + " record=" + record);
+                + " elapsed=" + elapsed + " shown=" + shown + " best=" + best + " record=" + record);
 
-        stopTimer(act);
         clearPress(view);
+        stopTimerAt(act, elapsed);
+        playCompleteSound(act);
+        restoreBar(act);
+        showDrawerMenu(act);
 
         if (!record && Prefs.autoNextNoRecord(c)) {
             restart(view, r, 220);
             return;
         }
-        // 成绩显示交给官方：把本局数据写进官方 result helper，再调官方的结算入口，
-        // 这样弹窗样式、新纪录/排名都与官方模式完全一致，不再自绘卡片。
-        if (!showOfficialResult(act, r, elapsed)) {
+        // 成绩显示完全交给官方弹窗：用模块回放助手的数据构造官方 SchulteRecord，
+        // 再塞一个本地 SchulteSuccess（不上传、不写官方数据库），新纪录判定也走官方逻辑
+        if (!showOfficialResult(act, view, r, best, record)) {
             restart(view, r, 900);
         }
     }
 
     /**
-     * 用官方成绩弹窗展示本局：设置官方计时器与统计后直接调用 result.z(true)。
+     * 用官方成绩弹窗（k.b.n4.o）展示本局。
+     * 数据来自 App 自己的 SchulteRecorder（点击时已经通过 $b.a/$b.c 写入），
+     * 因此时间/误点/回放曲线与官方完全一致；只是不上传服务器、不写官方记录库。
      * 返回 false 表示官方入口不可用（版本不符），由调用方兜底自动下一把。
      */
-    private static boolean showOfficialResult(Activity act, Round r, long elapsed) {
+    private static boolean showOfficialResult(final Activity act, final Object view, final Round r,
+                                              long bestBefore, boolean isRecord) {
         if (act == null) return false;
         try {
-            Object game = XposedHelpers.getObjectField(act, "g");
+            ClassLoader cl = act.getClassLoader();
+            Object rec = XposedHelpers.getObjectField(act, "i");
+            if (rec == null) return false;
             Object timer = XposedHelpers.getObjectField(act, "e");
-            Object result = XposedHelpers.getObjectField(act, "j");
-            try {
-                XposedHelpers.callMethod(timer, "l");      // 停表
-            } catch (Throwable ignored) {
-            }
-            XposedHelpers.callMethod(timer, "p", elapsed);
-            XposedHelpers.callMethod(result, "t", elapsed);
-            XposedHelpers.callMethod(result, "u", r.taps);
-            XposedHelpers.callMethod(result, "p", r.taps - r.errors);
-            syncGame(game, r);
-            Object finished = finishedStatus(act);
-            if (finished != null) XposedHelpers.callMethod(game, "u", finished);
-            XposedHelpers.callMethod(game, "r", -1);
-            advCompleting = true;
-            try {
-                XposedHelpers.callMethod(result, "z", Boolean.TRUE);
-            } finally {
-                advCompleting = false;
-            }
-            MainHook.log("高级模式完成，已按官方成绩显示: " + NAMES[r.mode] + " " + elapsed + "ms");
+            if (timer == null) return false;
+            // 与官方 $b.d 一致：先冻结表、把成绩写进回放助手，再 l() 生成官方 SchulteRecord
+            long time = (Long) XposedHelpers.callMethod(timer, "e");
+            if (time <= 0) time = 1L;
+            XposedHelpers.callMethod(rec, "t", time);
+            XposedHelpers.callMethod(rec, "u", r.taps);
+            XposedHelpers.callMethod(rec, "p", r.idx);
+            Object record = XposedHelpers.callMethod(rec, "l");
+            if (record == null) return false;
+            // l() 里的时间是「用时 + 误点次数 × 1s」，与实际展示保持一致
+            time = (Long) XposedHelpers.callMethod(record, "getTime");
+
+            Class<?> successCls = XposedHelpers.findClass(SUCCESS, cl);
+            Object success = XposedHelpers.newInstance(successCls);
+            XposedHelpers.callMethod(success, "setBestTime", bestBefore);
+            XposedHelpers.callMethod(success, "setTime", time);
+            XposedHelpers.callMethod(success, "setTap", r.taps);
+            XposedHelpers.callMethod(success, "setTapCorrect", r.idx);
+            XposedHelpers.callMethod(success, "setLevel", r.n);
+            XposedHelpers.callMethod(success, "setRankPercent", 0f);
+            XposedHelpers.callMethod(success, "setOldRank", 0);
+            XposedHelpers.callMethod(success, "setNewRank", 0);
+            XposedHelpers.callMethod(success, "setCoin", 0);
+            XposedHelpers.callMethod(success, "setRecordId", 0);
+
+            Class<?> dlgCls = XposedHelpers.findClass(RESULT_DIALOG, cl);
+            Class<?> callbackCls = XposedHelpers.findClass(RESULT_LISTENER, cl);
+            Object dlg = XposedHelpers.newInstance(dlgCls,
+                    new Class<?>[]{record.getClass(), successCls, boolean.class},
+                    record, success, Boolean.FALSE);
+            XposedHelpers.callMethod(dlg, "u", Proxy.newProxyInstance(cl,
+                    new Class<?>[]{callbackCls}, new InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy, Method method, Object[] args) {
+                            if ("a".equals(method.getName())) restart(view, r, 0);
+                            return null;
+                        }
+                    }));
+            ((Dialog) dlg).setOnDismissListener(new DialogInterface.OnDismissListener() {
+                @Override
+                public void onDismiss(DialogInterface dialog) {
+                    restart(view, r, 0);
+                }
+            });
+            ((Dialog) dlg).show();
+            MainHook.log("高级模式完成，已按官方成绩显示: " + NAMES[r.mode] + " " + time + "ms"
+                    + " 新纪录=" + isRecord);
             return true;
         } catch (Throwable t) {
             MainHook.log("高级模式官方结算失败: " + t);
             return false;
-        }
-    }
-
-    private static Object finishedStatus(Activity act) {
-        try {
-            Class<?> cls = XposedHelpers.findClassIfExists(
-                    "com.star.minesweeping.module.game.schulte.core.d",
-                    act.getClass().getClassLoader());
-            return cls == null ? null : XposedHelpers.getStaticObjectField(cls, "d");
-        } catch (Throwable t) {
-            return null;
         }
     }
 
@@ -514,38 +569,7 @@ public final class AdvancedSchulte {
         }, Math.max(60L, delay));
     }
 
-    // ------------------------------------------------------------------ 完成效果
-
-    private static void showComplete(Activity act, Round r, long elapsed, long bestBefore,
-                                     boolean record) {
-        if (act == null) return;
-        String title = NAMES[r.mode] + (record ? "  ·  新纪录" : "");
-        String big = fmt(elapsed);
-        StringBuilder sub = new StringBuilder();
-        if (r.mode == SPEED) {
-            sub.append("目标 1-").append(r.x).append("  /  ").append(r.n).append("×").append(r.n);
-        } else {
-            sub.append(r.n).append("×").append(r.n);
-        }
-        if (record) {
-            sub.append(bestBefore > 0
-                    ? "   原最佳 " + fmt(bestBefore)
-                    : "   首次记录");
-        } else {
-            sub.append("   最佳 ").append(fmt(bestBefore));
-        }
-        if (r.mode == MAXN) {
-            sub.append("\n最大间隔 ").append(fmt(r.maxGap))
-                    .append("  ≤  ").append(limitText(r.n));
-        }
-        if (r.mode == START1 && r.reaction > 0) {
-            sub.append("\n开局反应 ").append(fmt(r.reaction)).append("  ≤  0.45s");
-        }
-        if (r.errors > 0) {
-            sub.append("\n误点 ").append(r.errors).append(" 次");
-        }
-        showOverlay(act, r.mode, title, big, sub.toString(), accent(r.mode), false);
-    }
+    // ------------------------------------------------------------------ 失败提示
 
     private static void showFail(Activity act, Round r, String why) {
         if (act == null) return;
@@ -748,8 +772,49 @@ public final class AdvancedSchulte {
             XposedHelpers.callMethod(game, "x", r.taps);
             XposedHelpers.callMethod(game, "v", r.idx);
             XposedHelpers.callMethod(game, "w", r.errors);
-            XposedHelpers.callMethod(game, "r", r.idx);
+            // 简单/简单打乱下官方 onDraw 靠 progress 隐藏格子；这里固定 0，让「消失」只由置 0 的格子决定
+            XposedHelpers.callMethod(game, "r", r.hides ? 0 : r.idx);
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** 把点过的格子值改为 0：官方 onDraw 在 type 1/2 下会跳过 value <= progress(0) 的格子 */
+    private static void setCellValue(Object cells, int row, int col, int value) {
+        try {
+            Object[] line = (Object[]) java.lang.reflect.Array.get(cells, row);
+            if (line == null || col < 0 || col >= line.length || line[col] == null) return;
+            XposedHelpers.callMethod(line[col], "b", value);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Object tapListener(Object game) {
+        try {
+            return XposedHelpers.callMethod(game, "g");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 复用官方 $b.a：正确音效、进度显示、回放记录全部跟随 App 的设置 */
+    private static void officialRight(Object game, Round r, Object cells) {
+        Object listener = tapListener(game);
+        if (listener == null) return;
+        try {
+            XposedHelpers.callMethod(listener, "a", r.idx + 1, r.n * r.n, cells);
+        } catch (Throwable t) {
+            MainHook.log("高级模式正确点击官方回调失败: " + t);
+        }
+    }
+
+    /** 复用官方 $b.c：错误音效、震动、TTS、误点计数全部跟随 App 的设置 */
+    private static void officialWrong(Object game, int value, int want) {
+        Object listener = tapListener(game);
+        if (listener == null) return;
+        try {
+            XposedHelpers.callMethod(listener, "c", value, want);
+        } catch (Throwable t) {
+            MainHook.log("高级模式错误点击官方回调失败: " + t);
         }
     }
 
@@ -774,18 +839,48 @@ public final class AdvancedSchulte {
         }
     }
 
-    private static void clearPress(Object view) {
+    /** 冻结计时器在 elapsed，官方弹窗/记录读到的用时就是本局用时（不触发重置） */
+    private static void stopTimerAt(Activity act, long elapsed) {
+        if (act == null) return;
         try {
-            XposedHelpers.setIntField(view, "r", -1);
-            ((View) view).invalidate();
+            Object timer = XposedHelpers.getObjectField(act, "e");
+            if (timer != null) XposedHelpers.callMethod(timer, "p", elapsed);
         } catch (Throwable ignored) {
         }
     }
 
-    private static void vibrate(Context c) {
+    private static void playCompleteSound(Activity act) {
+        if (act == null) return;
         try {
-            XposedHelpers.callStaticMethod(
-                    XposedHelpers.findClass(VIBRATE_HELPER, c.getClassLoader()), "p", 30L);
+            Object sound = XposedHelpers.getObjectField(act, "h");
+            if (sound != null) XposedHelpers.callMethod(sound, "a", 0x7f0f000b);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void restoreBar(Activity act) {
+        if (act == null) return;
+        try {
+            Object binding = XposedHelpers.getObjectField(act, "view");
+            Object bar = XposedHelpers.getObjectField(binding, "S");
+            if (bar != null) XposedHelpers.callMethod(bar, "n", Boolean.FALSE);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 与官方完成回调一致：先把侧边菜单调出来，成绩弹窗再盖在上面 */
+    private static void showDrawerMenu(Activity act) {
+        if (act == null) return;
+        try {
+            XposedHelpers.callMethod(act, "showDrawerMenu");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void clearPress(Object view) {
+        try {
+            XposedHelpers.setIntField(view, "r", -1);
+            ((View) view).invalidate();
         } catch (Throwable ignored) {
         }
     }
