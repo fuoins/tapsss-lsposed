@@ -117,7 +117,25 @@ public final class SchulteHooks {
                 MainHook.log("ActionBar.c Hook 失败: " + t);
             }
         }
+
+        // 切换模式时绕过「游戏进行中」检查，让 W(int) 直接重建本局
+        Class<?> actCls = XposedHelpers.findClassIfExists(ACTIVITY, cl);
+        if (actCls != null) {
+            XposedBridge.hookAllMethods(actCls, "M", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (XposedHelpers.getAdditionalInstanceField(
+                            param.thisObject, KEY_BYPASS_BUSY) != null) {
+                        param.setResult(Boolean.FALSE);
+                    }
+                }
+            });
+        }
     }
+
+    static final String KEY_BYPASS_BUSY = "tapsss_bypass_busy";
+    private static final String ACTIVITY =
+            "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
 
     private static void applyCountdownConfig(View view) {
         Context c = view.getContext();

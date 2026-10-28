@@ -20,6 +20,7 @@ public final class Prefs {
     public static final String AUTO_RELOGIN = "auto_relogin";
     public static final String SAVED_UID = "saved_uid";
     public static final String SAVED_PWD = "saved_pwd";
+    public static final String TILE_SEEDED = "module_tile_seeded";
 
     public static final int MIN_COUNTDOWN_MS = 1000;
     public static final int MAX_COUNTDOWN_MS = 60000;
@@ -91,6 +92,15 @@ public final class Prefs {
 
     public static String savedPwd(Context c) {
         return str(c, SAVED_PWD);
+    }
+
+    /** 是否已经把「模块设置」默认加进快速开始（加过一次就不再强塞） */
+    public static boolean tileSeeded(Context c) {
+        return bool(c, TILE_SEEDED, false);
+    }
+
+    public static void setTileSeeded(Context c, boolean v) {
+        setBool(c, TILE_SEEDED, v);
     }
 
     public static int clampMs(int ms) {

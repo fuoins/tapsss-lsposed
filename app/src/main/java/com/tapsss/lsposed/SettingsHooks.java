@@ -11,6 +11,9 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -27,27 +30,172 @@ import de.robv.android.xposed.XposedHelpers;
 public final class SettingsHooks {
 
     private static final String SETTING = "com.star.minesweeping.ui.activity.setting.SettingActivity";
+    private static final String HOME = "com.star.minesweeping.ui.activity.setting.SettingHomeActivity";
+    private static final String BASE_ADAPTER = "com.chad.library.b.a.c";
+    private static final String GAME_MENU = "com.star.minesweeping.data.bean.item.GameMenu";
+    private static final String H_UTILS = "com.star.minesweeping.utils.h";
+    private static final String ROUTE = "/module/settings";
+    private static final String TILE_TEXT = "模块设置";
     private static final String TAG = "tapsss_module_section";
 
     private SettingsHooks() {
     }
 
     static void install(ClassLoader cl) {
-        Class<?> cls = XposedHelpers.findClassIfExists(SETTING, cl);
-        if (cls == null) {
+        Class<?> settingCls = XposedHelpers.findClassIfExists(SETTING, cl);
+        if (settingCls != null) {
+            XposedBridge.hookAllMethods(settingCls, "init", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        inject((Activity) param.thisObject);
+                    } catch (Throwable t) {
+                        MainHook.log("插入模块设置区块失败: " + t);
+                    }
+                }
+            });
+        } else {
             MainHook.log("未找到设置页 SettingActivity");
+        }
+
+        Class<?> homeCls = XposedHelpers.findClassIfExists(HOME, cl);
+        if (homeCls == null) {
+            MainHook.log("未找到 SettingHomeActivity");
             return;
         }
-        XposedBridge.hookAllMethods(cls, "init", new XC_MethodHook() {
+        XC_MethodHook tile = new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 try {
-                    inject((Activity) param.thisObject);
+                    seedTile((Activity) param.thisObject);
                 } catch (Throwable t) {
-                    MainHook.log("插入模块设置区块失败: " + t);
+                    MainHook.log("注入快速开始入口失败: " + t);
                 }
             }
-        });
+        };
+        XposedBridge.hookAllMethods(homeCls, "init", tile);
+        XposedBridge.hookAllMethods(homeCls, "I", tile);
+        hookGridClick(cl, HOME + "$b", true);
+        hookGridClick(cl, HOME + "$a", false);
+    }
+
+    /** 顶部网格项点击：b=全部游戏（可增删），a=快速开始（直接打开面板） */
+    private static void hookGridClick(ClassLoader cl, String clsName, final boolean toggle) {
+        Class<?> cls = XposedHelpers.findClassIfExists(clsName, cl);
+        Class<?> adapterCls = XposedHelpers.findClassIfExists(BASE_ADAPTER, cl);
+        if (cls == null || adapterCls == null) return;
+        try {
+            XposedHelpers.findAndHookMethod(cls, "p", adapterCls, View.class, int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Object adapter = param.args[0];
+                                int pos = (Integer) param.args[2];
+                                Object item = XposedHelpers.callMethod(adapter, "q0", pos);
+                                if (!ROUTE.equals(XposedHelpers.callMethod(item, "getRoute"))) return;
+                                param.setResult(null);
+                                Activity act = Ui.findActivity(((View) param.args[1]).getContext());
+                                if (act == null) return;
+                                if (toggle) {
+                                    toggleTile(act, adapter, item, pos);
+                                } else {
+                                    ModuleSettings.show(act);
+                                }
+                            } catch (Throwable t) {
+                                MainHook.log("模块入口点击失败: " + t);
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            MainHook.log("hook " + clsName + " 失败: " + t);
+        }
+    }
+
+    /** 默认加进快速开始 + 在「全部游戏」网格里补一个可增删的格子 */
+    private static void seedTile(Activity act) {
+        if (!Prefs.moduleEnabled(act)) return;
+        ClassLoader cl = act.getClassLoader();
+        Class<?> menuCls = XposedHelpers.findClassIfExists(GAME_MENU, cl);
+        Class<?> hCls = XposedHelpers.findClassIfExists(H_UTILS, cl);
+        if (menuCls == null || hCls == null) return;
+
+        List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
+        if (list == null) return;
+        boolean in = containsRoute(list);
+        if (!in && !Prefs.tileSeeded(act)) {
+            list.add(newMenu(act, menuCls, list, true));
+            XposedHelpers.callStaticMethod(hCls, "i", list);
+            in = true;
+        }
+        Prefs.setTileSeeded(act, true);
+
+        Object adapter = XposedHelpers.getObjectField(act, "b");
+        if (adapter == null) return;
+        List data = (List) XposedHelpers.callMethod(adapter, "getData");
+        if (data == null) return;
+        for (Object o : data) {
+            if (ROUTE.equals(XposedHelpers.callMethod(o, "getRoute"))) {
+                XposedHelpers.setBooleanField(o, "active", in);
+                return;
+            }
+        }
+        data.add(newMenu(act, menuCls, data, in));
+        XposedHelpers.callMethod(adapter, "notifyDataSetChanged");
+    }
+
+    private static void toggleTile(Activity act, Object adapter, Object item, int pos) {
+        ClassLoader cl = act.getClassLoader();
+        Class<?> menuCls = XposedHelpers.findClass(GAME_MENU, cl);
+        Class<?> hCls = XposedHelpers.findClass(H_UTILS, cl);
+        List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
+        if (list == null) list = new ArrayList();
+        boolean in = containsRoute(list);
+        if (in) {
+            for (int i = list.size() - 1; i >= 0; i--) {
+                if (ROUTE.equals(XposedHelpers.callMethod(list.get(i), "getRoute"))) {
+                    list.remove(i);
+                }
+            }
+        } else {
+            list.add(newMenu(act, menuCls, list, true));
+        }
+        XposedHelpers.callStaticMethod(hCls, "i", list);
+        XposedHelpers.setBooleanField(item, "active", !in);
+        XposedHelpers.callMethod(adapter, "notifyItemChanged", pos);
+        try {
+            XposedHelpers.callMethod(act, "I");
+        } catch (Throwable t) {
+            MainHook.log("刷新快速开始失败: " + t);
+        }
+    }
+
+    private static boolean containsRoute(List list) {
+        for (Object o : list) {
+            try {
+                if (ROUTE.equals(XposedHelpers.callMethod(o, "getRoute"))) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    private static Object newMenu(Activity act, Class<?> menuCls, List sameList, boolean active) {
+        String colorId = "";
+        for (Object o : sameList) {
+            try {
+                Object c = XposedHelpers.callMethod(o, "getColorID");
+                if (c instanceof String && ((String) c).length() > 0) {
+                    colorId = (String) c;
+                    break;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Object menu = XposedHelpers.newInstance(menuCls, "ic_setting", TILE_TEXT, colorId,
+                Boolean.valueOf(active));
+        XposedHelpers.callMethod(menu, "setRoute", ROUTE);
+        return menu;
     }
 
     private static void inject(final Activity act) {

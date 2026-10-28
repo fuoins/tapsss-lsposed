@@ -55,7 +55,8 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 | 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
 | 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底 |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入一行模式选择 |
-| 模式切换 | 仅改阶数且未在游戏中 → 调原 `W(int)`；否则改写 `a`/`b`/`c` 字段并更新 Intent extras 后 `recreate()`（该页 launchMode=singleTask，restart 会复用旧实例） |
+| 快速开始入口 | 首次进入 `SettingHomeActivity` 时把 `GameMenu("ic_setting","模块设置")` 写进快速开始列表（KV `utils.h.i`），并在「全部游戏」网格里注入同款格子；点格子可像其它游戏一样增删（`$b.p` 拦截 → 改 KV 列表 + 刷新）；点快速开始里的图标打开面板 |
+| 模式切换 | 原地生效：`a`/`b`/`c` 字段 + `game.y(type)` / `game.o(blind)` 后调原 `W(int)`；用一次性标记绕过 `M()` 的「游戏进行中」判断 |
 | 自动重登 | `LoginActivity.L()` before 保存手机号/密码；`LoginActivity.init()` after 自动填入并调用 `L()` |
 
 配置保存在目标应用私有目录 `shared_prefs/tapsss_module.xml`（普通 `SharedPreferences`，Hook 与被 Hook 同进程）。
