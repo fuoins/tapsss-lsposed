@@ -22,6 +22,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-33" "build-tools;34.0.0"
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -36,7 +39,3 @@ jobs:
           name: tapsss-lsposed-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-
-      - name: Upload release APK (unsigned)
-        if: github.event_name == 'push'
-        run: gradle assembleRelease --no-daemon

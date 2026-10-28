@@ -3,6 +3,10 @@
 针对「扫雷联萌」（`com.star.minesweeping`，官网 <http://tapsss.com/>）的 LSPosed 模块。
 适配版本：**3.6.10**（3.6.x 结构一致）。
 
+## 下载
+
+已构建的 APK：[v1.0.0 release](https://github.com/fuoins/tapsss-lsposed/releases/latest)
+
 ## 功能
 
 ### 舒尔特方格
