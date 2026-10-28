@@ -132,6 +132,32 @@ public final class SchulteHooks {
                     }
                 }
             });
+
+            // 从「舒尔特设置 / 模块设置」返回游戏页时重读 App 配置（倒计时开关/时长等），
+            // 否则要退出游戏页再进来才生效
+            XC_MethodHook reload = new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    // 可能挂在父类（BaseGameDrawerActivity/BaseActivity）的 onResume 上，这里只处理舒尔特游戏页
+                    if (!ACTIVITY.equals(param.thisObject.getClass().getName())) return;
+                    try {
+                        reloadViewConfig(param.thisObject);
+                    } catch (Throwable t) {
+                        MainHook.log("返回游戏页刷新配置失败: " + t);
+                    }
+                }
+            };
+            for (Class<?> c = actCls; c != null && c != Object.class; c = c.getSuperclass()) {
+                try {
+                    XposedHelpers.findAndHookMethod(c, "onResume", reload);
+                    break;
+                } catch (NoSuchMethodError e) {
+                    // 往上找声明 onResume 的父类
+                } catch (Throwable t) {
+                    MainHook.log("onResume Hook 失败: " + t);
+                    break;
+                }
+            }
         }
 
         // 高级模式（本地记录，不上传）
@@ -146,6 +172,7 @@ public final class SchulteHooks {
     private static final String ACTIVITY =
             "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
     private static final String RANGE = "com.star.minesweeping.k.b.h4.l";
+    private static final String SCHULTE_CONFIG = "com.star.minesweeping.i.c.d.a";
     private static final String SCHULTE_START_ACTIVITY =
             "com.star.minesweeping.ui.activity.setting.game.SettingSchulteStartActivity";
 
@@ -197,6 +224,50 @@ public final class SchulteHooks {
     private static long countdownUntil(Object view) {
         Object v = XposedHelpers.getAdditionalInstanceField(view, KEY_UNTIL);
         return v instanceof Long ? ((Long) v).longValue() : 0L;
+    }
+
+    /**
+     * 从设置页回到游戏页：SchulteView 只在构造时读过一次 KV，这里重读一遍；
+     * 若倒计时开关/时长有变化且当前处于「准备」状态，再调 h()(=i(null)) 按新值重新倒计时，
+     * 不用退出游戏页重进。
+     */
+    private static void reloadViewConfig(Object act) {
+        Object binding = XposedHelpers.getObjectField(act, "view");
+        if (binding == null) return;
+        Object view = XposedHelpers.getObjectField(binding, "T");
+        if (!(view instanceof View)) return;
+
+        boolean wasEnabled = XposedHelpers.getBooleanField(view, "y");
+        long wasMs = XposedHelpers.getLongField(view, "z");
+        XposedHelpers.callMethod(view, "reload");
+        boolean enabled = XposedHelpers.getBooleanField(view, "y");
+        long ms = XposedHelpers.getLongField(view, "z");
+
+        Object game = XposedHelpers.getObjectField(act, "g");
+        if (game != null) {
+            try {
+                Class<?> configCls = XposedHelpers.findClassIfExists(SCHULTE_CONFIG,
+                        act.getClass().getClassLoader());
+                if (configCls != null) {
+                    Object config = XposedHelpers.callStaticMethod(configCls, "c");
+                    if (config != null) XposedHelpers.callMethod(game, "q", config);
+                }
+            } catch (Throwable ignored) {
+            }
+            if ((wasEnabled != enabled || wasMs != ms) && ready(game)) {
+                XposedHelpers.callMethod(view, "h");
+            }
+        }
+        ((View) view).invalidate();
+    }
+
+    private static boolean ready(Object game) {
+        try {
+            Object status = XposedHelpers.callMethod(game, "h");
+            return status instanceof Enum && "b".equals(((Enum<?>) status).name());
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private static void blockTouchDuringCountdown(XC_MethodHook.MethodHookParam param) {

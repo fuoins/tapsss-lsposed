@@ -51,7 +51,8 @@ public final class ModuleSettings {
         final CheckBox cbAutoNext = check(c,
                 "非新纪录不展示成绩，自动下一把", Prefs.autoNextNoRecord(c));
         root.addView(cbAutoNext);
-        root.addView(hint(c, "勾选后：高级模式每局结束若没有刷新纪录，不显示成绩，直接开始下一局"));
+        root.addView(hint(c, "勾选后：高级模式每局结束若没有刷新纪录（含失败/点错），不展示成绩直接下一把"));
+        root.addView(hint(c, "关掉后：每局结束都会显示成绩或失败原因"));
 
         root.addView(feature(c, "高级模式（顺序/爆手速/倒序/归中/max≤N/1start，成绩仅本地记录，不上传）"));
         root.addView(feature(c, "右上角阶数弹窗增强"));

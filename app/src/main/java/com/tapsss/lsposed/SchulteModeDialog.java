@@ -254,10 +254,15 @@ public final class SchulteModeDialog {
                         adv[0] = idx;
                         Prefs.setAdvMode(act, idx);
                         refreshAdv.run();
+                        if (idx == AdvancedSchulte.MODE_OFF) return;
                         // 高级模式需要全部数字可见：盲玩时切回普通模式（会重建本局）
-                        if (idx != AdvancedSchulte.MODE_OFF && applied[1] == 1) {
+                        if (applied[1] == 1) {
                             apply(act, (Dialog) dlg, applied, 0, false, applied[2], refreshAdv);
                             Ui.toast(act, "高级模式使用普通棋盘，已关闭盲玩");
+                        } else {
+                            // 立即重置本局：否则要等下一次点击才触发重开，看起来像「点一下就重开」
+                            AdvancedSchulte.resetRound(act);
+                            Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]);
                         }
                     }
                 });
@@ -284,6 +289,8 @@ public final class SchulteModeDialog {
                             adv[0] = AdvancedSchulte.MODE_OFF;
                             Prefs.setAdvMode(act, AdvancedSchulte.MODE_OFF);
                             refreshAdv.run();
+                            // 高级模式的对局进度要清掉，回到官方模式从干净的一局开始
+                            AdvancedSchulte.resetRound(act);
                         }
                         // 点模式格子立即切模式，无需再去点阶数格子
                         apply(act, (Dialog) dlg, applied, MODES[idx][0],

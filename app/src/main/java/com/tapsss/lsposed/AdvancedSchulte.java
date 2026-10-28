@@ -205,6 +205,36 @@ public final class AdvancedSchulte {
         handleTap(view, (Integer) param.args[0], (Integer) param.args[1]);
     }
 
+    /**
+     * 在切到高级模式的瞬间就重置本局：
+     * 否则下一次点击会走到 onTap 的「对局模式不匹配 → 重开」兜底，
+     * 表现为「点一下就重开」。
+     */
+    static void resetRound(Activity act) {
+        if (act == null) return;
+        Object view = null;
+        try {
+            Object binding = XposedHelpers.getObjectField(act, "view");
+            view = XposedHelpers.getObjectField(binding, "T");
+        } catch (Throwable t) {
+            MainHook.log("高级模式取棋盘失败: " + t);
+        }
+        if (view != null) {
+            restartNow(view);
+            return;
+        }
+        try {
+            XposedHelpers.setAdditionalInstanceField(act, SchulteHooks.KEY_BYPASS_BUSY, Boolean.TRUE);
+            try {
+                XposedHelpers.callMethod(act, "V");
+            } finally {
+                XposedHelpers.removeAdditionalInstanceField(act, SchulteHooks.KEY_BYPASS_BUSY);
+            }
+        } catch (Throwable t) {
+            MainHook.log("高级模式重置本局失败: " + t);
+        }
+    }
+
     /** 在棋盘上直接重开：停表、清空对局状态后调用 Activity.V() 重建本局。 */
     private static void restartNow(Object view) {
         Context c = ((View) view).getContext();
@@ -336,6 +366,8 @@ public final class AdvancedSchulte {
         long best = Prefs.getLong(c, key, 0L);
         boolean record = best <= 0 || elapsed < best;
         if (record) Prefs.setLong(c, key, elapsed);
+        MainHook.log("高级模式完成: " + NAMES[r.mode] + " n=" + r.n + " x=" + r.x
+                + " elapsed=" + elapsed + " best=" + best + " record=" + record);
 
         stopTimer(act);
         clearPress(view);
@@ -354,6 +386,13 @@ public final class AdvancedSchulte {
         Activity act = Ui.findActivity(c);
         stopTimer(act);
         clearPress(view);
+        // 「非新纪录不展示成绩」开启时，失败同样不弹卡片，直接下一把
+        if (Prefs.autoNextNoRecord(c)) {
+            MainHook.log("高级模式失败（不展示）: " + NAMES[r.mode] + " " + why);
+            hideOverlay(act);
+            restart(view, r, 260);
+            return;
+        }
         showFail(act, r, why);
         restart(view, r, restartDelay);
     }
