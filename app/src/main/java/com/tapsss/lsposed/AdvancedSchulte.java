@@ -129,6 +129,8 @@ public final class AdvancedSchulte {
         long reaction;
         long maxGap;
         boolean done;
+        /** 简单/简单打乱会把点过的格子值置 0，这里留一份原始棋盘用于结算后还原展示 */
+        int[][] orig;
     }
 
     /**
@@ -480,7 +482,9 @@ public final class AdvancedSchulte {
             int k = (int) x + 1;
             if (k <= 0) return;
             TextView first = (TextView) XposedHelpers.getObjectField(param.thisObject, "f");
-            first.setText("序号: " + k + " · 数字 " + numberAt(mode, n, k));
+            // 曲线 x 轴已经按「实际点击的数字」显示（倒序 98765…），
+            // 提示框的序号也要用同一个数字，否则第一点会显示成 1。
+            first.setText("序号: " + numberAt(mode, n, k));
         } catch (Throwable ignored) {
         }
     }
@@ -723,6 +727,7 @@ public final class AdvancedSchulte {
             r.blind = false;
         }
         r.hides = r.type == 1 || r.type == 2;
+        if (r.hides) r.orig = snapshotCells(g);
         r.startAt = SystemClock.elapsedRealtime();
         r.lastCorrectAt = r.startAt;
         // 新的一局开始：上一把成绩面板的序号改写不再生效
@@ -763,6 +768,9 @@ public final class AdvancedSchulte {
         playCompleteSound(act);
         restoreBar(act);
         showDrawerMenu(act);
+        // 简单 / 简单打乱：模块把点过的格子值置 0 来隐藏，结算后（弹窗还在时）
+        // 把棋盘还原成最初的样子，点空白关闭弹窗后仍能看到完整的块（与官方顺序简单一致）
+        restoreCells(view, r);
 
         // 非新纪录：与官方模式一致，静默直接下一把，不弹成绩面板
         if (!record && Prefs.autoNextNoRecord(c)) {
@@ -1218,6 +1226,69 @@ public final class AdvancedSchulte {
             // 简单/简单打乱下官方 onDraw 靠 progress 隐藏格子；这里固定 0，让「消失」只由置 0 的格子决定
             XposedHelpers.callMethod(game, "r", r.hides ? 0 : r.idx);
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** 复制一份当前棋盘数字，供简单模式结算后还原（0 表示隐藏的格子） */
+    private static int[][] snapshotCells(Object g) {
+        try {
+            Object cells = XposedHelpers.callMethod(g, "c");
+            if (cells == null) return null;
+            int rows = java.lang.reflect.Array.getLength(cells);
+            int[][] copy = new int[rows][];
+            for (int i = 0; i < rows; i++) {
+                Object line = java.lang.reflect.Array.get(cells, i);
+                if (line == null) continue;
+                int cols = java.lang.reflect.Array.getLength(line);
+                copy[i] = new int[cols];
+                for (int j = 0; j < cols; j++) {
+                    Object cell = java.lang.reflect.Array.get(line, j);
+                    if (cell == null) continue;
+                    Object v = XposedHelpers.callMethod(cell, "a");
+                    copy[i][j] = v instanceof Integer ? (Integer) v : 0;
+                }
+            }
+            return copy;
+        } catch (Throwable t) {
+            MainHook.log("高级模式棋盘快照失败: " + t);
+            return null;
+        }
+    }
+
+    /** 把点掉的格子还原成最初的样子（只影响棋盘显示，不影响已写入的成绩/回放） */
+    private static void restoreCells(Object view, Round r) {
+        if (r == null || r.orig == null) return;
+        try {
+            Object g = game(view);
+            if (g == null) return;
+            Object cells = XposedHelpers.callMethod(g, "c");
+            if (cells == null) return;
+            int rows = Math.min(r.orig.length, java.lang.reflect.Array.getLength(cells));
+            for (int i = 0; i < rows; i++) {
+                int[] origLine = r.orig[i];
+                if (origLine == null) continue;
+                for (int j = 0; j < origLine.length; j++) {
+                    if (origLine[j] > 0) setCellValue(cells, i, j, origLine[j]);
+                }
+            }
+            // 与官方点满一局后的状态一致：Finished + 进度 -1 + 显示数字，
+            // 这样官方 onDraw 的隐藏条件（type 1/2 且 值<=进度 且 非 Finished）不再成立
+            try {
+                Class<?> stCls = XposedHelpers.findClass(
+                        "com.star.minesweeping.module.game.schulte.core.d",
+                        g.getClass().getClassLoader());
+                Object finished = XposedHelpers.getStaticObjectField(stCls, "d");
+                XposedHelpers.callMethod(g, "u", finished);
+            } catch (Throwable ignored) {
+            }
+            try {
+                XposedHelpers.setBooleanField(view, "w", false);
+            } catch (Throwable ignored) {
+            }
+            XposedHelpers.setIntField(view, "r", -1);
+            ((View) view).invalidate();
+        } catch (Throwable t) {
+            MainHook.log("高级模式棋盘还原失败: " + t);
         }
     }
 
