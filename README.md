@@ -29,7 +29,7 @@
 
 ## 使用
 
-进入扫雷联萌 → **设置** → 新增的 **模块设置** 入口：
+进入扫雷联萌 → **设置** → 右上角 **齿轮图标**（模块设置）：
 
 - 一级：舒尔特方格 / 账号与登录（多设备掉线自动重登）/ 关于；
 - 二级：各功能开关与倒计时时长。
@@ -53,7 +53,7 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 
 | 功能 | Hook 点 |
 | --- | --- |
-| 设置页入口 | `SettingHomeActivity.init()/I()` 后向 adapter（字段 `c`）追加 `GameMenu("ic_setting","模块设置","",true)`；`SettingHomeActivity$a.p(...)` 拦截点击 |
+| 设置页入口 | `SettingHomeActivity.initActionBar(ActionBar)` 后追加 `ActionBar.c(1, mipmap/ic_setting, ...)` 齿轮按钮，点击打开模块设置 |
 | 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
 | 倒计时点击拦截 | `SchulteView.onTouchEvent` before：状态 `d.b` 且 `elapsedRealtime()-x < z` 时吞掉 DOWN/POINTER_DOWN |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮替换点击为自绘弹窗 |
