@@ -133,6 +133,13 @@ public final class SchulteHooks {
                 }
             });
         }
+
+        // 高级模式（本地记录，不上传）
+        try {
+            AdvancedSchulte.install(cl);
+        } catch (Throwable t) {
+            MainHook.log("AdvancedSchulte 安装失败: " + t);
+        }
     }
 
     static final String KEY_BYPASS_BUSY = "tapsss_bypass_busy";

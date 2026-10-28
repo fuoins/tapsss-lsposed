@@ -379,7 +379,7 @@ public final class SettingsHooks {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = Ui.dp(act, 5);
-        parent.addView(section, parent.indexOfChild(common) + 1, lp);
+        parent.addView(section, 0, lp); // 放在设置页最顶部
         MainHook.log("已插入模块设置区块");
     }
 

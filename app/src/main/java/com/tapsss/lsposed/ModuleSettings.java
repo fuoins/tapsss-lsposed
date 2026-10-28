@@ -48,6 +48,12 @@ public final class ModuleSettings {
         root.addView(cbBlock);
         root.addView(hint(c, "勾选后：倒计时期间点击棋盘不会跳过倒计时"));
 
+        final CheckBox cbAutoNext = check(c,
+                "非新纪录不展示成绩，自动下一把", Prefs.autoNextNoRecord(c));
+        root.addView(cbAutoNext);
+        root.addView(hint(c, "勾选后：高级模式每局结束若没有刷新纪录，不显示成绩，直接开始下一局"));
+
+        root.addView(feature(c, "高级模式（顺序/爆手速/倒序/归中/max≤N/1start，成绩仅本地记录，不上传）"));
         root.addView(feature(c, "右上角阶数弹窗增强"));
         root.addView(feature(c, "倒计时取消下限限制"));
         root.addView(feature(c, "重开预设"));
@@ -56,6 +62,7 @@ public final class ModuleSettings {
             @Override
             public void run() {
                 Prefs.setBool(c, Prefs.BLOCK_TOUCH, cbBlock.isChecked());
+                Prefs.setBool(c, Prefs.AUTO_NEXT_NO_RECORD, cbAutoNext.isChecked());
                 Ui.toast(c, "已保存");
             }
         });
@@ -121,9 +128,11 @@ public final class ModuleSettings {
     private static void showAbout(final Activity act) {
         LinearLayout root = vertical(act);
         TextView tv = new TextView(act);
-        tv.setText("扫雷联萌增强 v1.0.6\n\n"
+        tv.setText("扫雷联萌增强 v1.0.7\n\n"
                 + "· 舒尔特功能：倒计时期间点击不直接开始（可关闭）、"
-                + "右上角阶数弹窗内直接切换模式、倒计时时长下限取消（可设为 0）、重开预设\n"
+                + "右上角阶数弹窗内直接切换模式与高级模式、倒计时时长下限取消（可设为 0）、重开预设\n"
+                + "· 高级模式：顺序 / 爆手速（可设目标 x）/ 倒序 / 归中 / max≤N / 1start，"
+                + "成绩只在本地记录、不上传；每局结束有独立效果，可开启「非新纪录不展示成绩，自动下一把」\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
                 + "适用版本：扫雷联萌 3.6.x\n"
                 + "使用方式：在 LSPosed 中启用模块，作用域勾选「扫雷联萌」，"

@@ -17,6 +17,9 @@ public final class Prefs {
     public static final String SAVED_UID = "saved_uid";
     public static final String SAVED_PWD = "saved_pwd";
     public static final String TILE_SEEDED = "module_tile_seeded";
+    public static final String ADV_MODE = "schulte_adv_mode";
+    public static final String ADV_X = "schulte_adv_x";
+    public static final String AUTO_NEXT_NO_RECORD = "schulte_auto_next_no_record";
 
     private static volatile SharedPreferences sp;
 
@@ -77,6 +80,43 @@ public final class Prefs {
     public static void setBool(Context c, String key, boolean value) {
         SharedPreferences p = get(c);
         if (p != null) p.edit().putBoolean(key, value).apply();
+    }
+
+    /** 高级模式：0=关闭（官方顺序模式）1=爆手速 2=倒序 3=归中 4=max≤N 5=1start */
+    public static int advMode(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_MODE, 0);
+    }
+
+    public static void setAdvMode(Context c, int mode) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_MODE, mode).apply();
+    }
+
+    /** 爆手速目标 x，0 表示取 n² */
+    public static int advX(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_X, 0);
+    }
+
+    public static void setAdvX(Context c, int x) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_X, x).apply();
+    }
+
+    /** 非新纪录时不展示成绩，直接自动下一把 */
+    public static boolean autoNextNoRecord(Context c) {
+        return bool(c, AUTO_NEXT_NO_RECORD, true);
+    }
+
+    public static long getLong(Context c, String key, long def) {
+        SharedPreferences p = get(c);
+        return p == null ? def : p.getLong(key, def);
+    }
+
+    public static void setLong(Context c, String key, long value) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putLong(key, value).apply();
     }
 
     public static void saveCredentials(Context c, String uid, String pwd) {
