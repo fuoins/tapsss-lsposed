@@ -259,14 +259,14 @@ public final class SchulteModeDialog {
                             Ui.toast(act, "1start 训练仅支持 3-5 阶");
                             return;
                         }
+                        if (adv[0] == idx) return;   // 没有变化：留着弹窗让用户继续改
                         adv[0] = idx;
                         Prefs.setAdvMode(act, idx);
                         refreshAdv.run();
-                        if (idx == AdvancedSchulte.MODE_OFF) return;
-                        // 高级模式是在当前官方模式（简单/普通/打乱/盲玩）之上叠加出题规则，
-                        // 不清盘、也不改官方棋盘设置；下一次点击才按新模式现场起局
-                        Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]
-                                + " · " + AdvancedSchulte.statusText());
+                        // 切换高级模式后直接关窗并重建本局，状态立刻生效
+                        ((Dialog) dlg).dismiss();
+                        AdvancedSchulte.resetRound(act);
+                        Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]);
                     }
                 });
                 TextView info = advInfos[i];
@@ -287,15 +287,9 @@ public final class SchulteModeDialog {
                         for (int k = 0; k < chips.length; k++) {
                             if (chips[k] != null) styleCell(act, chips[k], k == idx);
                         }
-                        // 选官方模式即退出高级模式
-                        if (adv[0] != AdvancedSchulte.MODE_OFF) {
-                            adv[0] = AdvancedSchulte.MODE_OFF;
-                            Prefs.setAdvMode(act, AdvancedSchulte.MODE_OFF);
-                            refreshAdv.run();
-                            // 高级模式的对局进度要清掉，回到官方模式从干净的一局开始
-                            AdvancedSchulte.resetRound(act);
-                        }
-                        // 点模式格子立即切模式，无需再去点阶数格子
+                        // 点模式格子立即切模式，无需再去点阶数格子。
+                        // 注意：这里不动高级模式 —— 高级模式是在当前官方模式之上叠加规则，
+                        // 切官方模式不应该把高级模式退回「顺序」
                         apply(act, (Dialog) dlg, applied, MODES[idx][0],
                                 MODES[idx][1] == 1, applied[2], refreshAdv);
                     }
@@ -324,10 +318,16 @@ public final class SchulteModeDialog {
                 public void onClick(View v) {
                     ((Dialog) dlg).dismiss();
                     try {
+                        // 标记「去过设置页」：返回游戏页时直接整页重建，
+                        // 主题 / 倒计时 / 重开预设等一切设置都按新值重新初始化
+                        XposedHelpers.setAdditionalInstanceField(act,
+                                SchulteHooks.KEY_FROM_SETTINGS, Boolean.TRUE);
                         Intent it = new Intent();
                         it.setClassName(act, SCHULTE_SETTING);
                         act.startActivity(it);
                     } catch (Throwable t) {
+                        XposedHelpers.removeAdditionalInstanceField(act,
+                                SchulteHooks.KEY_FROM_SETTINGS);
                         MainHook.log("打开舒尔特设置失败: " + t);
                         Ui.toast(act, "打开舒尔特设置失败");
                     }
