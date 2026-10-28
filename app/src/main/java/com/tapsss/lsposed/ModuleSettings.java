@@ -40,7 +40,7 @@ public final class ModuleSettings {
         }
     }
 
-    private static void showSchulte(final Activity act) {
+    static void showSchulte(final Activity act) {
         final Context c = act;
         LinearLayout root = vertical(c);
         root.addView(hint(c, "修改后重新进入游戏生效"));
@@ -89,7 +89,7 @@ public final class ModuleSettings {
         });
     }
 
-    private static void showAccount(final Activity act) {
+    static void showAccount(final Activity act) {
         final Context c = act;
         LinearLayout root = vertical(c);
         root.addView(hint(c, "当同一账号在另一台设备登录后，本机会回到登录页；开启后自动用保存的账号密码重登。"));
@@ -127,7 +127,7 @@ public final class ModuleSettings {
     private static void showAbout(final Activity act) {
         LinearLayout root = vertical(act);
         TextView tv = new TextView(act);
-        tv.setText("扫雷联萌增强 v1.0.0\n\n"
+        tv.setText("扫雷联萌增强 v1.0.3\n\n"
                 + "· 舒尔特：开始倒计时（下限 1000ms）、倒计时期间点击不开始、"
                 + "右上角阶数弹窗内可直接切换模式与阶数\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"

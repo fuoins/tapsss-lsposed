@@ -29,12 +29,10 @@
 
 ## 使用
 
-进入扫雷联萌 → **设置** → 「全部游戏」网格里的 **模块设置**：
+进入扫雷联萌 → **设置** → 「通用」下方新增的同级 **模块设置** 区块：
 
-- 一级：舒尔特方格 / 账号与登录（多设备掉线自动重登）/ 关于；
-- 二级：各功能开关与倒计时时长。
-
-> 舒尔特相关配置在**重新进入游戏**后生效。
+- 舒尔特方格 / 账号与登录两个入口，右侧「…」打开完整菜单（含关于）；
+- 舒尔特改动需重新进入游戏生效。
 
 ## 构建
 
@@ -53,7 +51,7 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 
 | 功能 | Hook 点 |
 | --- | --- |
-| 设置页入口 | 在「全部游戏」网格（`SettingHomeActivity` 字段 `b` 的适配器）里追加一个 `GameMenu("ic_setting","模块设置")` 并设置 route；`SettingHomeActivity$b.p(...)` 拦截点击打开模块设置。放在 `b` 而不是 `c`，避免混进「快速开始」 |
+| 设置页入口 | `SettingActivity.init()` 后，在 `common_layout`（通用）下方插入同级区块：标题「模块设置」+ 舒尔特方格 / 账号与登录 / 「…」，视图结构与 `activity_setting.xml` 里其它区块一致（`MenuTitleText` + `layout_selector_background_radius_4`） |
 | 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
 | 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底 |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入一行模式选择 |
