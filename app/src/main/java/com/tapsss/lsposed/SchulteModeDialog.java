@@ -3,7 +3,7 @@ package com.tapsss.lsposed;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
-import android.graphics.Typeface;
+import android.content.Intent;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -54,6 +54,8 @@ public final class SchulteModeDialog {
             final int curLevel = readLevel(act);
 
             final int[] picked = {indexOf(curType, curBlind)};
+            /** 已生效的 {type, blind(0/1), level}，连续点多个格子时以此为准 */
+            final int[] applied = {curType, curBlind ? 1 : 0, curLevel};
             final Object dlg = newInstance(dlgCls, new Class<?>[]{int.class, int.class, int.class},
                     curLevel, 3, 10);
 
@@ -86,6 +88,9 @@ public final class SchulteModeDialog {
                             for (int i = 0; i < chips.length; i++) {
                                 if (chips[i] != null) styleCell(act, chips[i], i == idx);
                             }
+                            // 点模式格子立即切模式，无需再去点阶数格子
+                            apply(act, (Dialog) dlg, applied, MODES[idx][0],
+                                    MODES[idx][1] == 1, applied[2]);
                         }
                     });
                     chips[idx] = chip;
@@ -114,8 +119,8 @@ public final class SchulteModeDialog {
                         @Override
                         public Object invoke(Object proxy, Method method, Object[] args) {
                             if (args != null && args.length == 1 && args[0] instanceof Integer) {
-                                apply(act, (Integer) args[0], MODES[picked[0]][0],
-                                        MODES[picked[0]][1] == 1, curType, curBlind, curLevel);
+                                apply(act, (Dialog) dlg, applied, applied[0],
+                                        applied[1] == 1, (Integer) args[0]);
                             }
                             return null;
                         }
@@ -129,18 +134,45 @@ public final class SchulteModeDialog {
         }
     }
 
-    /** 阶数格子同款文字：居中、加粗、font_big */
+    /**
+     * 阶数格子同款文字：ButtonLayout 里的 TextView 是私有字段 a（无 id），
+     * setText() 内部用默认 wrap_content 参数 addView，程序化创建时文字会顶着左上角；
+     * 这里把它改成 fill_parent + 居中（ButtonLayout 本身没有 setTextSizePx 之类的方法）。
+     */
     private static void centerText(Activity act, View chip) {
         try {
-            TextView tv = (TextView) chip.findViewById(Ui.resId(act, "text", "id"));
+            LinearLayout layout = (LinearLayout) chip;
+            layout.setOrientation(LinearLayout.VERTICAL);
+            layout.setGravity(Gravity.CENTER);
+            TextView tv = innerText(chip, layout);
             if (tv == null) return;
+            tv.setLayoutParams(new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
             tv.setGravity(Gravity.CENTER);
-            tv.setTypeface(Typeface.DEFAULT_BOLD);
-            tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, act.getResources()
-                    .getDimensionPixelSize(Ui.resId(act, "font_big", "dimen")));
+            tv.setIncludeFontPadding(false);
+            tv.getPaint().setFakeBoldText(true);
+            int id = Ui.resId(act, "font_normal", "dimen");
+            if (id != 0) {
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_PX,
+                        act.getResources().getDimensionPixelSize(id));
+            }
         } catch (Throwable t) {
-            MainHook.log("模式文字样式失败: " + t);
+            MainHook.log("模式文字居中失败: " + t);
         }
+    }
+
+    /** ButtonLayout 内部 TextView：优先取私有字段 a，取不到再退化为第一个 TextView 子 View */
+    private static TextView innerText(View chip, LinearLayout layout) {
+        try {
+            Object f = XposedHelpers.getObjectField(chip, "a");
+            if (f instanceof TextView && ((TextView) f).getParent() == layout) return (TextView) f;
+        } catch (Throwable ignored) {
+        }
+        for (int i = 0; i < layout.getChildCount(); i++) {
+            View v = layout.getChildAt(i);
+            if (v instanceof TextView) return (TextView) v;
+        }
+        return null;
     }
 
     /** 与 k.a.g 绑定格子时的 setTextColor / setPressedColor / setSelected 保持一致 */
@@ -178,26 +210,54 @@ public final class SchulteModeDialog {
         }
     }
 
-    /** 原地生效：改字段 + 改游戏模型 + 调原版 W(int) 重建本局（绕过进行中检查） */
-    private static void apply(Activity act, int level, int type, boolean blind,
-                              int curType, boolean curBlind, int curLevel) {
-        if (type == curType && blind == curBlind && level == curLevel) return;
-        try {
-            XposedHelpers.setIntField(act, "a", type);
-            XposedHelpers.setBooleanField(act, "b", blind);
-            XposedHelpers.setIntField(act, "c", level);
-            Object game = XposedHelpers.getObjectField(act, "g");
-            if (game != null) {
-                XposedHelpers.callMethod(game, "y", type);
-                XposedHelpers.callMethod(game, "o", blind);
+    /**
+     * 原地生效：
+     *  - 只改阶数：直接调原版 W(level) 重建本局；
+     *  - 改模式：3.6.10 的盲玩/模式控制器（i.c.d.c.a）在 init() 时按 Intent 的
+     *    type/blind 创建，改字段不会刷新它，因此改 Intent extras 后 recreate()，
+     *    让 ARouter 重新注入。两者都改时一并交给 recreate()。
+     */
+    private static void apply(Activity act, Dialog dlg, int[] applied, int type, boolean blind, int level) {
+        boolean modeChanged = type != applied[0] || blind != (applied[1] == 1);
+        boolean levelChanged = level != applied[2];
+        if (!modeChanged && !levelChanged) return;
+
+        if (modeChanged) {
+            try {
+                Intent intent = act.getIntent();
+                intent.putExtra("type", type);
+                intent.putExtra("blind", blind);
+                intent.putExtra("level", level);
+                applied[0] = type;
+                applied[1] = blind ? 1 : 0;
+                applied[2] = level;
+                Ui.toast(act, "已切换为 " + LABELS[indexOf(type, blind)]);
+                if (dlg != null && dlg.isShowing()) dlg.dismiss();
+                act.recreate();
+                return;
+            } catch (Throwable t) {
+                MainHook.log("重建游戏页失败，改为原地修改: " + t);
             }
+        }
+
+        try {
             XposedHelpers.setAdditionalInstanceField(act, SchulteHooks.KEY_BYPASS_BUSY, Boolean.TRUE);
             try {
+                XposedHelpers.setIntField(act, "a", type);
+                XposedHelpers.setBooleanField(act, "b", blind);
+                Object game = XposedHelpers.getObjectField(act, "g");
+                if (game != null) {
+                    XposedHelpers.callMethod(game, "y", type);
+                    XposedHelpers.callMethod(game, "o", blind);
+                }
                 XposedHelpers.callMethod(act, "W", level);
             } finally {
                 XposedHelpers.removeAdditionalInstanceField(act, SchulteHooks.KEY_BYPASS_BUSY);
             }
-            if (type != curType || blind != curBlind) {
+            applied[0] = type;
+            applied[1] = blind ? 1 : 0;
+            applied[2] = level;
+            if (modeChanged) {
                 Ui.toast(act, "已切换为 " + LABELS[indexOf(type, blind)]);
             }
         } catch (Throwable t) {

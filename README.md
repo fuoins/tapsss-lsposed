@@ -11,7 +11,7 @@
 
 ### 舒尔特方格
 
-- **开始倒计时**：可关闭；开启时倒计时时长可调，**下限 1000 毫秒**（默认 3000ms）。
+- **开始倒计时**：可关闭；开启时倒计时时长可调，范围 **0–60000 毫秒**（填 0 表示不等待，默认 3000ms）。
 - **倒计时期间点击不开始**：倒计时进行中点击棋盘不会跳过倒计时直接开局，并弹提示。
 - **阶数弹窗加入模式切换**：点游戏右上角「阶数」按钮，弹窗内可同时切换 **模式**（简单 / 简单·盲打 / 普通 / 普通·盲打 / 混合·简单 / 混合）和 **阶数**（3–10）。
 
@@ -55,8 +55,8 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 | 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
 | 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底 |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入一行模式选择 |
-| 快速开始入口 | 首次进入 `SettingHomeActivity` 时把 `GameMenu("ic_setting","模块设置")` 写进快速开始列表（KV `utils.h.i`），并在「全部游戏」网格里注入同款格子；点格子可像其它游戏一样增删（`$b.p` 拦截 → 改 KV 列表 + 刷新）；点快速开始里的图标打开面板 |
-| 模式切换 | 原地生效：`a`/`b`/`c` 字段 + `game.y(type)` / `game.o(blind)` 后调原 `W(int)`；用一次性标记绕过 `M()` 的「游戏进行中」判断 |
+| 快速开始入口 | 进程启动（`MinesweeperApplication.onCreate`）时把 `GameMenu("ic_setting","模块设置")` 写进快速开始列表（KV `utils.h.i`），并在「全部游戏」网格里注入同款格子；点格子可像其它游戏一样增删（`$b.p` 拦截 → 改 KV 列表 + 刷新）；点快速开始里的图标打开面板（`$a.p` 拦截 + `ActionRouter.go` 兜底） |
+| 模式切换 | 改 `Intent` 的 `type`/`blind`/`level` extras 后 `recreate()`，让 ARouter 重新注入字段并重建模式控制器 `i.c.d.c.a`；只改阶数时仍调原 `W(int)`（用一次性标记绕过 `M()` 的「游戏进行中」判断） |
 | 自动重登 | `LoginActivity.L()` before 保存手机号/密码；`LoginActivity.init()` after 自动填入并调用 `L()` |
 
 配置保存在目标应用私有目录 `shared_prefs/tapsss_module.xml`（普通 `SharedPreferences`，Hook 与被 Hook 同进程）。

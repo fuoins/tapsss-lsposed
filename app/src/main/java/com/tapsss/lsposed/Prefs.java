@@ -22,7 +22,7 @@ public final class Prefs {
     public static final String SAVED_PWD = "saved_pwd";
     public static final String TILE_SEEDED = "module_tile_seeded";
 
-    public static final int MIN_COUNTDOWN_MS = 1000;
+    public static final int MIN_COUNTDOWN_MS = 0;
     public static final int MAX_COUNTDOWN_MS = 60000;
 
     private static volatile SharedPreferences sp;
@@ -69,7 +69,7 @@ public final class Prefs {
         return bool(c, COUNTDOWN_ENABLED, true);
     }
 
-    /** 倒计时时长，始终保证 >= 1000ms */
+    /** 倒计时时长，0 表示不等待；上限 60000ms */
     public static long countdownMs(Context c) {
         return clampMs(integer(c, COUNTDOWN_MS, 3000));
     }

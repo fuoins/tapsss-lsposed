@@ -54,7 +54,7 @@ public final class ModuleSettings {
         root.addView(cbBlock);
         root.addView(cbMode);
 
-        root.addView(hint(c, "倒计时时长（毫秒，下限 1000）"));
+        root.addView(hint(c, "倒计时时长（毫秒，填 0 表示不等待）"));
         final EditText et = new EditText(c);
         et.setInputType(InputType.TYPE_CLASS_NUMBER);
         et.setSingleLine(true);
@@ -81,7 +81,7 @@ public final class ModuleSettings {
                 int clamped = Prefs.clampMs(ms);
                 Prefs.setInt(c, Prefs.COUNTDOWN_MS, clamped);
                 if (clamped != ms) {
-                    Ui.toast(c, "倒计时时长已调整为 " + clamped + " 毫秒（下限 1000）");
+                    Ui.toast(c, "倒计时时长已调整为 " + clamped + " 毫秒（0~60000）");
                 } else {
                     Ui.toast(c, "已保存");
                 }
@@ -127,8 +127,8 @@ public final class ModuleSettings {
     private static void showAbout(final Activity act) {
         LinearLayout root = vertical(act);
         TextView tv = new TextView(act);
-        tv.setText("扫雷联萌增强 v1.0.4\n\n"
-                + "· 舒尔特：开始倒计时（下限 1000ms）、倒计时期间点击不开始、"
+        tv.setText("扫雷联萌增强 v1.0.5\n\n"
+                + "· 舒尔特：开始倒计时（可设为 0 直接开始）、倒计时期间点击不开始、"
                 + "右上角阶数弹窗内可直接切换模式与阶数\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
                 + "适用版本：扫雷联萌 3.6.x\n"

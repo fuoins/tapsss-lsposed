@@ -1,6 +1,7 @@
 package com.tapsss.lsposed;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Typeface;
 import android.util.TypedValue;
@@ -11,8 +12,10 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -31,7 +34,8 @@ public final class SettingsHooks {
 
     private static final String SETTING = "com.star.minesweeping.ui.activity.setting.SettingActivity";
     private static final String HOME = "com.star.minesweeping.ui.activity.setting.SettingHomeActivity";
-    private static final String BASE_ADAPTER = "com.chad.library.b.a.c";
+    private static final String APPLICATION = "com.star.minesweeping.MinesweeperApplication";
+    private static final String ROUTER = "com.star.router.ActionRouter";
     private static final String GAME_MENU = "com.star.minesweeping.data.bean.item.GameMenu";
     private static final String H_UTILS = "com.star.minesweeping.utils.h";
     private static final String ROUTE = "/module/settings";
@@ -75,67 +79,136 @@ public final class SettingsHooks {
         };
         XposedBridge.hookAllMethods(homeCls, "init", tile);
         XposedBridge.hookAllMethods(homeCls, "I", tile);
-        hookGridClick(cl, HOME + "$b", true);
-        hookGridClick(cl, HOME + "$a", false);
+        hookGridClick(homeCls, "b", true);
+        hookGridClick(homeCls, "a", false);
+
+        // 进程启动时就写进快速开始列表，无需先进入一次设置里的快速开始页
+        Class<?> appCls = XposedHelpers.findClassIfExists(APPLICATION, cl);
+        if (appCls != null) {
+            XposedBridge.hookAllMethods(appCls, "onCreate", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        seedStore((Context) param.thisObject);
+                    } catch (Throwable t) {
+                        MainHook.log("启动时注入快速开始入口失败: " + t);
+                    }
+                }
+            });
+        } else {
+            MainHook.log("未找到 MinesweeperApplication");
+        }
+
+        // 兜底：点击模块格子时原版会走 ActionRouter.go("/module/settings")，此处直接拦下
+        Class<?> routerCls = XposedHelpers.findClassIfExists(ROUTER, cl);
+        if (routerCls != null) {
+            try {
+                XposedHelpers.findAndHookMethod(routerCls, "go", String.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (param.args.length != 1 || !ROUTE.equals(param.args[0])) return;
+                        param.setResult(null);
+                        Activity act = currentActivity();
+                        if (act != null) ModuleSettings.show(act);
+                    }
+                });
+            } catch (Throwable t) {
+                MainHook.log("ActionRouter.go Hook 失败: " + t);
+            }
+        }
     }
 
     /** 顶部网格项点击：b=全部游戏（可增删），a=快速开始（直接打开面板） */
-    private static void hookGridClick(ClassLoader cl, String clsName, final boolean toggle) {
-        Class<?> cls = XposedHelpers.findClassIfExists(clsName, cl);
-        Class<?> adapterCls = XposedHelpers.findClassIfExists(BASE_ADAPTER, cl);
-        if (cls == null || adapterCls == null) return;
-        try {
-            XposedHelpers.findAndHookMethod(cls, "p", adapterCls, View.class, int.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) {
-                            try {
-                                Object adapter = param.args[0];
-                                int pos = (Integer) param.args[2];
-                                Object item = XposedHelpers.callMethod(adapter, "q0", pos);
-                                if (!ROUTE.equals(XposedHelpers.callMethod(item, "getRoute"))) return;
-                                param.setResult(null);
-                                Activity act = Ui.findActivity(((View) param.args[1]).getContext());
-                                if (act == null) return;
-                                if (toggle) {
-                                    toggleTile(act, adapter, item, pos);
-                                } else {
-                                    ModuleSettings.show(act);
-                                }
-                            } catch (Throwable t) {
-                                MainHook.log("模块入口点击失败: " + t);
-                            }
+    private static void hookGridClick(Class<?> homeCls, String innerName, final boolean toggle) {
+        Class<?> cls = null;
+        for (Class<?> c : homeCls.getDeclaredClasses()) {
+            if (c.getName().endsWith("$" + innerName)) {
+                cls = c;
+                break;
+            }
+        }
+        if (cls == null) {
+            MainHook.log("未找到 " + HOME + "$" + innerName);
+            return;
+        }
+        boolean hooked = false;
+        // 3.6.x 的 xBaseAdapter 在不同版本里包名不同，按「(adapter, View, int)」签名动态匹配
+        for (Method m : cls.getDeclaredMethods()) {
+            Class<?>[] ps = m.getParameterTypes();
+            if (!"p".equals(m.getName()) || ps.length != 3
+                    || ps[1] != View.class || ps[2] != int.class) continue;
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        Object adapter = param.thisObject;
+                        int pos = (Integer) param.args[2];
+                        Object item = XposedHelpers.callMethod(adapter, "q0", pos);
+                        if (!isOurTile(item)) return;
+                        param.setResult(null);
+                        Activity act = Ui.findActivity(((View) param.args[1]).getContext());
+                        if (act == null) return;
+                        if (toggle) {
+                            toggleTile(act, adapter, item, pos);
+                        } else {
+                            ModuleSettings.show(act);
                         }
-                    });
+                    } catch (Throwable t) {
+                        MainHook.log("模块入口点击失败: " + t);
+                    }
+                }
+            });
+            hooked = true;
+        }
+        if (!hooked) MainHook.log("未找到 " + cls.getName() + ".p");
+    }
+
+    /** 取当前前台 Activity（ActionRouter 回调里没有 Context，只能从 ActivityThread 拿） */
+    private static Activity currentActivity() {
+        try {
+            Object thread = XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", null),
+                    "currentActivityThread");
+            Map<?, ?> records = (Map<?, ?>) XposedHelpers.getObjectField(thread, "mActivities");
+            if (records == null) return null;
+            Activity best = null;
+            if (records.isEmpty()) return null;
+            for (Object record : records.values()) {
+                Activity a = (Activity) XposedHelpers.getObjectField(record, "activity");
+                if (a == null || a.isFinishing()) continue;
+                boolean paused = XposedHelpers.getBooleanField(record, "paused");
+                if (best == null) {
+                    best = a;
+                } else if (!paused) {
+                    best = a; // 优先取未暂停的
+                }
+            }
+            return best;
         } catch (Throwable t) {
-            MainHook.log("hook " + clsName + " 失败: " + t);
+            MainHook.log("获取当前 Activity 失败: " + t);
+            return null;
         }
     }
 
     /** 默认加进快速开始 + 在「全部游戏」网格里补一个可增删的格子 */
     private static void seedTile(Activity act) {
         if (!Prefs.moduleEnabled(act)) return;
+        seedStore(act);
+
         ClassLoader cl = act.getClassLoader();
         Class<?> menuCls = XposedHelpers.findClassIfExists(GAME_MENU, cl);
         Class<?> hCls = XposedHelpers.findClassIfExists(H_UTILS, cl);
         if (menuCls == null || hCls == null) return;
-
         List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
         if (list == null) return;
-        boolean in = containsRoute(list);
-        if (!in && !Prefs.tileSeeded(act)) {
-            list.add(newMenu(act, menuCls, list, true));
-            XposedHelpers.callStaticMethod(hCls, "i", list);
-            in = true;
-        }
-        Prefs.setTileSeeded(act, true);
+        boolean in = containsOurTile(list);
 
         Object adapter = XposedHelpers.getObjectField(act, "b");
         if (adapter == null) return;
         List data = (List) XposedHelpers.callMethod(adapter, "getData");
         if (data == null) return;
         for (Object o : data) {
-            if (ROUTE.equals(XposedHelpers.callMethod(o, "getRoute"))) {
+            if (isOurTile(o)) {
                 XposedHelpers.setBooleanField(o, "active", in);
                 return;
             }
@@ -144,16 +217,33 @@ public final class SettingsHooks {
         XposedHelpers.callMethod(adapter, "notifyDataSetChanged");
     }
 
+    /** 只维护 KV 里的快速开始列表（可在进程启动、页面还没创建时调用） */
+    private static void seedStore(Context c) {
+        if (c == null || !Prefs.moduleEnabled(c)) return;
+        ClassLoader cl = c.getClassLoader();
+        Class<?> menuCls = XposedHelpers.findClassIfExists(GAME_MENU, cl);
+        Class<?> hCls = XposedHelpers.findClassIfExists(H_UTILS, cl);
+        if (menuCls == null || hCls == null) return;
+
+        List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
+        if (list == null) return; // KV 未初始化时不强写，避免把默认列表覆盖成空
+        if (!containsOurTile(list) && !Prefs.tileSeeded(c)) {
+            list.add(newMenu(c, menuCls, list, true));
+            XposedHelpers.callStaticMethod(hCls, "i", list);
+        }
+        Prefs.setTileSeeded(c, true);
+    }
+
     private static void toggleTile(Activity act, Object adapter, Object item, int pos) {
         ClassLoader cl = act.getClassLoader();
         Class<?> menuCls = XposedHelpers.findClass(GAME_MENU, cl);
         Class<?> hCls = XposedHelpers.findClass(H_UTILS, cl);
         List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
         if (list == null) list = new ArrayList();
-        boolean in = containsRoute(list);
+        boolean in = containsOurTile(list);
         if (in) {
             for (int i = list.size() - 1; i >= 0; i--) {
-                if (ROUTE.equals(XposedHelpers.callMethod(list.get(i), "getRoute"))) {
+                if (isOurTile(list.get(i))) {
                     list.remove(i);
                 }
             }
@@ -170,23 +260,34 @@ public final class SettingsHooks {
         }
     }
 
-    private static boolean containsRoute(List list) {
+    private static boolean isOurTile(Object item) {
+        if (item == null) return false;
+        try {
+            if (ROUTE.equals(XposedHelpers.callMethod(item, "getRoute"))) return true;
+        } catch (Throwable ignored) {
+        }
+        // 万一 route 没被持久化，用格子文字兜底识别
+        try {
+            return TILE_TEXT.equals(XposedHelpers.callMethod(item, "getText"));
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean containsOurTile(List list) {
         for (Object o : list) {
-            try {
-                if (ROUTE.equals(XposedHelpers.callMethod(o, "getRoute"))) return true;
-            } catch (Throwable ignored) {
-            }
+            if (isOurTile(o)) return true;
         }
         return false;
     }
 
-    private static Object newMenu(Activity act, Class<?> menuCls, List sameList, boolean active) {
+    private static Object newMenu(Context c, Class<?> menuCls, List sameList, boolean active) {
         String colorId = "";
         for (Object o : sameList) {
             try {
-                Object c = XposedHelpers.callMethod(o, "getColorID");
-                if (c instanceof String && ((String) c).length() > 0) {
-                    colorId = (String) c;
+                Object id = XposedHelpers.callMethod(o, "getColorID");
+                if (id instanceof String && ((String) id).length() > 0) {
+                    colorId = (String) id;
                     break;
                 }
             } catch (Throwable ignored) {
@@ -200,6 +301,11 @@ public final class SettingsHooks {
 
     private static void inject(final Activity act) {
         if (!Prefs.moduleEnabled(act)) return;
+        try {
+            seedStore(act); // 兜底：即使进程启动时 KV 还没就绪，进入设置页也会补上
+        } catch (Throwable t) {
+            MainHook.log("设置页补种快速开始入口失败: " + t);
+        }
         View common = act.findViewById(Ui.resId(act, "common_layout", "id"));
         if (common == null) return;
         final ViewGroup parent = (ViewGroup) common.getParent();
