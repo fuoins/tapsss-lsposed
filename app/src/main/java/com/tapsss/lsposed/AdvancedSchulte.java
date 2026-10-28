@@ -89,7 +89,10 @@ public final class AdvancedSchulte {
     /** 成绩面板曲线的「序号/数字」按当前高级模式改写：0 = 不处理 */
     private static volatile int chartMode;
     private static volatile int chartN;
+    /** 曲线实际的点数（爆手速时等于目标 x），用来收敛 X 轴刻度 */
+    private static volatile int chartCount;
     private static volatile boolean chartHooked;
+    private static volatile boolean chartAxisHooked;
     private static volatile boolean detailHooked;
     private static long lastEnsureAt;
     /** 正在走官方结算：避免官方完成回调被「非新纪录不展示」二次拦截 */
@@ -143,6 +146,7 @@ public final class AdvancedSchulte {
                 install(cl);
             }
             installChartHooks(cl);
+            AdvancedPages.install(cl);
             SchulteHooks.ensureOfficialHooks(cl);
             MainHook.log("高级模式补装检查: e=" + eHooked + " j=" + jHooked + " i=" + iHooked
                     + " restart=" + restartBlocked);
@@ -233,6 +237,7 @@ public final class AdvancedSchulte {
                             // 新的一局开始：成绩面板的序号改写只对刚结束那一把有效
                             chartMode = MODE_OFF;
                             chartN = 0;
+                            chartCount = 0;
                             hideOverlay(Ui.findActivity(((View) view).getContext()));
                         } catch (Throwable ignored) {
                         }
@@ -317,6 +322,27 @@ public final class AdvancedSchulte {
             chartHooked = axisCls != null && markerCls != null;
         }
 
+        // 曲线点数很少时（爆手速 x 很小），MPAndroidChart 默认会画出很多重复/无意义刻度
+        if (!chartAxisHooked) {
+            Class<?> dlgCls = XposedHelpers.findClassIfExists(RESULT_DIALOG, cl);
+            if (dlgCls != null) {
+                try {
+                    XposedBridge.hookAllMethods(dlgCls, "t", new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                fixChartXAxis(param);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+                    chartAxisHooked = true;
+                } catch (Throwable t) {
+                    MainHook.log("成绩曲线 X 轴收敛失败: " + t);
+                }
+            }
+        }
+
         // 「点击查看详细数据」列表：首列序号同样是 1..n²，倒序/归中下要和曲线一致
         if (!detailHooked) {
             Class<?> detailCls = XposedHelpers.findClassIfExists(DETAIL_ADAPTER, cl);
@@ -366,12 +392,81 @@ public final class AdvancedSchulte {
     private static void decorateAxis(XC_MethodHook.MethodHookParam param) {
         int mode = chartMode;
         int n = chartN;
-        if ((mode != REVERSE && mode != MID) || n <= 0) return;
+        if (n <= 0) return;
+        if (mode == SPEED) {
+            // 爆手速：刻度值就是第几次点击，只保留落在真实点数范围内的整数刻度，
+            // 其余（默认图表在小数据量下产生的半刻度/越界刻度）留空
+            float v = (param.args.length > 0 && param.args[0] instanceof Float)
+                    ? (Float) param.args[0] : 0f;
+            int k = Math.round(v) + 1;
+            int count = Math.max(1, chartCount);
+            if (Math.abs(v - Math.round(v)) > 0.01f || k > count) {
+                param.setResult("");
+            } else {
+                param.setResult(String.valueOf(Math.max(1, k)));
+            }
+            return;
+        }
+        if (mode != REVERSE && mode != MID) return;
         Object res = param.getResult();
         if (!(res instanceof String)) return;
         int k = parseInt((String) res);
         if (k <= 0) return;
         param.setResult(String.valueOf(numberAt(mode, n, k)));
+    }
+
+    /**
+     * 爆手速目标 x 很小（例如 x=1）时，X 轴默认会按整张图的宽度划出很多刻度，
+     * 出现大量重复/无意义数字。这里按实际点数把 X 轴收敛到 1..count。
+     */
+    private static void fixChartXAxis(XC_MethodHook.MethodHookParam param) {
+        if (chartMode != SPEED) return;
+        Object binding = XposedHelpers.getObjectField(param.thisObject, "b");
+        if (binding == null) return;
+        Object chart = XposedHelpers.getObjectField(binding, "R");
+        if (chart == null) return;
+
+        int count = 0;
+        Object data = XposedHelpers.callMethod(chart, "getLineData");
+        if (data != null) {
+            Object sc = XposedHelpers.callMethod(data, "getDataSetCount");
+            int setCount = sc instanceof Integer ? (Integer) sc : 0;
+            for (int i = 0; i < setCount; i++) {
+                Object ds = XposedHelpers.callMethod(data, "getDataSetByIndex", i);
+                if (ds == null) continue;
+                Object ec = XposedHelpers.callMethod(ds, "getEntryCount");
+                int c = ec instanceof Integer ? (Integer) ec : 0;
+                if (c > count) count = c;
+            }
+        }
+        if (count <= 0) count = Math.max(1, chartCount);
+        chartCount = count;
+
+        Object xAxis = XposedHelpers.callMethod(chart, "getXAxis");
+        if (xAxis == null) return;
+        XposedHelpers.callMethod(xAxis, "setGranularity", 1f);
+        XposedHelpers.callMethod(xAxis, "setGranularityEnabled", Boolean.TRUE);
+        XposedHelpers.callMethod(xAxis, "setAxisMinimum", 0f);
+        if (count <= 1) {
+            XposedHelpers.callMethod(xAxis, "setAxisMaximum", 1f);
+            XposedHelpers.callMethod(xAxis, "setLabelCount", 2, Boolean.TRUE);
+        } else {
+            // 强制刻度模式下 MPAndroidChart 用 (max-min)/(labelCount-1) 均分，
+            // 只有区间能被整除时刻度才是整数，否则 formatter 会把小数刻度全置空、
+            // 只剩首尾两个数字。这里选一个能整除点数的刻度数。
+            int steps = count - 1;
+            int labels = 2;
+            for (int d = Math.min(count, 6); d >= 2; d--) {
+                if (steps % (d - 1) == 0) {
+                    labels = d;
+                    break;
+                }
+            }
+            XposedHelpers.callMethod(xAxis, "setAxisMaximum", (float) steps);
+            XposedHelpers.callMethod(xAxis, "setLabelCount", labels, Boolean.TRUE);
+        }
+        XposedHelpers.callMethod(chart, "invalidate");
+        MainHook.log("成绩曲线 X 轴收敛: points=" + count + " mode=" + chartMode);
     }
 
     private static void decorateMarker(XC_MethodHook.MethodHookParam param) {
@@ -633,6 +728,7 @@ public final class AdvancedSchulte {
         // 新的一局开始：上一把成绩面板的序号改写不再生效
         chartMode = MODE_OFF;
         chartN = 0;
+        chartCount = 0;
         XposedHelpers.setAdditionalInstanceField(view, KEY_ROUND, r);
 
         // 高级模式是在「当前官方模式」的基础上叠加出题顺序规则，
@@ -656,6 +752,8 @@ public final class AdvancedSchulte {
         long best = Prefs.getLong(c, key, 0L);
         boolean record = best <= 0 || shown < best;
         if (record) Prefs.setLong(c, key, shown);
+        // 本地历史（今日统计 / 本地页 / 高级模式排名共用），只存本机不上传
+        AdvStore.add(c, r.mode, r.type, r.blind, r.n, r.x, shown, r.reaction, r.errors);
         MainHook.log("高级模式完成: " + NAMES[r.mode] + " n=" + r.n + " x=" + r.x
                 + " type=" + r.type + " blind=" + r.blind
                 + " elapsed=" + elapsed + " shown=" + shown + " best=" + best + " record=" + record);
@@ -690,6 +788,48 @@ public final class AdvancedSchulte {
         int mode = (r.mode >= 0 && r.mode < SHORT.length) ? r.mode : MODE_OFF;
         if (mode == MODE_OFF) return base;
         return base + "-" + SHORT[mode];
+    }
+
+    /**
+     * 成绩弹窗里的「今日统计」原本只统计官方 SchulteRecordDB，
+     * 高级模式不写那个库，所以永远是空的。这里改成统计模块本地的今日记录。
+     */
+    private static void overrideTodayStats(Object binding, Round r, Context c) {
+        if (binding == null || c == null) return;
+        java.util.List<AdvStore.Rec> list = AdvStore.today(c, r.type, r.blind, r.mode, r.n,
+                r.mode == SPEED ? r.x : 0);
+        long best = Long.MAX_VALUE;
+        long sum = 0L;
+        for (AdvStore.Rec rec : list) {
+            if (rec.time < best) best = rec.time;
+            sum += rec.time;
+        }
+        TextView count = (TextView) XposedHelpers.getObjectField(binding, "f0");
+        TextView bestTv = (TextView) XposedHelpers.getObjectField(binding, "e0");
+        TextView avg = (TextView) XposedHelpers.getObjectField(binding, "d0");
+        if (count != null) count.setText("次数: " + list.size());
+        if (bestTv != null) {
+            bestTv.setText("最佳: " + (list.isEmpty() ? "--" : fmtApp(best, c)));
+        }
+        if (avg != null) {
+            avg.setText("平均: " + (list.isEmpty() ? "--" : fmtApp(sum / list.size(), c)));
+        }
+        Object container = XposedHelpers.getObjectField(binding, "g0");
+        if (container instanceof View) ((View) container).setVisibility(View.VISIBLE);
+    }
+
+    /** 用 App 自己的时间格式（utils.m.m），保持和官方统计完全一致 */
+    private static String fmtApp(long ms, Context c) {
+        try {
+            Class<?> cls = XposedHelpers.findClassIfExists(
+                    "com.star.minesweeping.utils.m", c.getClassLoader());
+            if (cls != null) {
+                Object s = XposedHelpers.callStaticMethod(cls, "m", Math.max(0L, ms));
+                if (s instanceof String) return (String) s;
+            }
+        } catch (Throwable ignored) {
+        }
+        return fmt(ms);
     }
 
     /** 官方成绩面板不可用时的兜底：自绘一层同样的成绩信息，随后自动下一把 */
@@ -750,6 +890,10 @@ public final class AdvancedSchulte {
 
             Class<?> dlgCls = XposedHelpers.findClass(RESULT_DIALOG, cl);
             Class<?> callbackCls = XposedHelpers.findClass(RESULT_LISTENER, cl);
+            // 必须在构造弹窗之前设置：官方 t() 在构造里就要按模式收敛曲线 X 轴
+            chartMode = r.mode;
+            chartN = r.n;
+            chartCount = Math.max(1, r.x);
             Object dlg = XposedHelpers.newInstance(dlgCls,
                     new Class<?>[]{record.getClass(), successCls, boolean.class},
                     record, success, Boolean.FALSE);
@@ -758,11 +902,10 @@ public final class AdvancedSchulte {
                 Object binding = XposedHelpers.getObjectField(dlg, "b");
                 TextView modeTv = (TextView) XposedHelpers.getObjectField(binding, "T");
                 modeTv.setText(modeLabel(r));
+                overrideTodayStats(binding, r, act);
             } catch (Throwable t) {
                 MainHook.log("高级模式成绩标题改写失败: " + t);
             }
-            chartMode = r.mode;
-            chartN = r.n;
             XposedHelpers.callMethod(dlg, "u", Proxy.newProxyInstance(cl,
                     new Class<?>[]{callbackCls}, new InvocationHandler() {
                         @Override
@@ -777,6 +920,7 @@ public final class AdvancedSchulte {
                 // 官方 f4.c.show() 会静默吞异常，这里必须自己确认窗口真的出来了
                 chartMode = MODE_OFF;
                 chartN = 0;
+                chartCount = 0;
                 MainHook.log("高级模式官方成绩面板未显示: " + modeLabel(r));
                 return false;
             }
@@ -788,6 +932,7 @@ public final class AdvancedSchulte {
         } catch (Throwable t) {
             chartMode = MODE_OFF;
             chartN = 0;
+            chartCount = 0;
             MainHook.log("高级模式官方结算失败: " + t);
             return false;
         }
