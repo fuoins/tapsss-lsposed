@@ -43,6 +43,10 @@ public final class AdvancedSchulte {
     static final String[] NAMES = {
             "顺序模式", "爆手速训练", "倒序训练", "归中训练", "max≤N训练", "1start训练"};
 
+    /** 成绩面板上「简单-顺序」这种后缀用的短名 */
+    static final String[] SHORT = {
+            "顺序", "爆手速", "倒序", "归中", "max≤N", "1start"};
+
     static final String[] DESCS = {
             "从头点到尾（1→n²），默认模式，即官方的正常模式。",
             "一眼能看到的数字（比如 1-9）要在 2 秒内点完。五阶 1-25 刷成绩的话，"
@@ -66,6 +70,9 @@ public final class AdvancedSchulte {
             "com.star.minesweeping.data.api.game.schulte.SchulteSuccess";
     private static final String RESULT_DIALOG = "com.star.minesweeping.k.b.n4.o";
     private static final String RESULT_LISTENER = "com.star.minesweeping.k.b.n4.o$c";
+    private static final String AXIS_FORMATTER = "com.star.minesweeping.k.b.n4.o$a";
+    private static final String RESULT_MARKER =
+            "com.star.minesweeping.ui.view.chart.SchulteResultMarkerView";
 
     private static final String KEY_PREV_STATUS = "tapsss_adv_prev_status";
     private static final String KEY_ROUND = "tapsss_adv_round";
@@ -74,7 +81,13 @@ public final class AdvancedSchulte {
     /** 安装结果：在模式弹窗里显示，方便确认当前运行的是哪版代码、Hook 是否真的生效 */
     static volatile boolean eHooked;
     static volatile boolean jHooked;
+    static volatile boolean iHooked;
     static volatile boolean restartBlocked;
+    /** 成绩面板曲线的「序号/数字」按当前高级模式改写：0 = 不处理 */
+    private static volatile int chartMode;
+    private static volatile int chartN;
+    private static volatile boolean chartHooked;
+    private static long lastEnsureAt;
     /** 正在走官方结算：避免官方完成回调被「非新纪录不展示」二次拦截 */
     static volatile boolean advCompleting;
     private static volatile String installError = "";
@@ -99,6 +112,7 @@ public final class AdvancedSchulte {
         int x;
         /** 官方 type：1/2（简单、简单打乱）点过的格子会消失，0/3（普通、普通打乱）不会 */
         int type;
+        boolean blind;
         boolean hides;
         long startAt;
         long lastCorrectAt;
@@ -108,6 +122,27 @@ public final class AdvancedSchulte {
         long reaction;
         long maxGap;
         boolean done;
+    }
+
+    /**
+     * 页面每次进入时补装一次：早期安装若因类还没加载而失败，这里会按需重试。
+     * 已经在 install() 里做了幂等保护，重复调用不会叠加 Hook。
+     */
+    static void ensureInstalled(Activity act) {
+        if (act == null) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastEnsureAt < 3000L) return;
+        lastEnsureAt = now;
+        try {
+            ClassLoader cl = act.getClassLoader();
+            if (!eHooked || !jHooked || !iHooked || !restartBlocked || !chartHooked) install(cl);
+            installChartHooks(cl);
+            SchulteHooks.ensureOfficialHooks(cl);
+            MainHook.log("高级模式补装检查: e=" + eHooked + " j=" + jHooked + " i=" + iHooked
+                    + " restart=" + restartBlocked);
+        } catch (Throwable t) {
+            MainHook.log("高级模式补装失败: " + t);
+        }
     }
 
     static void install(ClassLoader cl) {
@@ -128,102 +163,212 @@ public final class AdvancedSchulte {
                 }
             }
         };
-        try {
-            XposedHelpers.findAndHookMethod(viewCls, "e", int.class, int.class, tap);
-            eHooked = true;
-        } catch (Throwable t) {
-            // 版本差异导致签名不一致时，退化为按方法名接管
+        if (!eHooked) {
             try {
-                XposedBridge.hookAllMethods(viewCls, "e", tap);
+                XposedHelpers.findAndHookMethod(viewCls, "e", int.class, int.class, tap);
                 eHooked = true;
-                MainHook.log("高级模式 e() 按名兜底接管（签名不符）");
-            } catch (Throwable t2) {
-                installError = "e() 接管失败";
-                MainHook.log("高级模式 e() Hook 失败: " + t);
+            } catch (Throwable t) {
+                // 版本差异导致签名不一致时，退化为按方法名接管
+                try {
+                    XposedBridge.hookAllMethods(viewCls, "e", tap);
+                    eHooked = true;
+                    MainHook.log("高级模式 e() 按名兜底接管（签名不符）");
+                } catch (Throwable t2) {
+                    installError = "e() 接管失败";
+                    MainHook.log("高级模式 e() Hook 失败: " + t);
+                }
             }
         }
 
-        try {
-            XposedBridge.hookAllMethods(viewCls, "j", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    try {
-                        Object view = param.thisObject;
-                        XposedHelpers.setAdditionalInstanceField(view, KEY_PREV_STATUS,
-                                statusName(game(view)));
-                    } catch (Throwable ignored) {
+        if (!jHooked) {
+            try {
+                XposedBridge.hookAllMethods(viewCls, "j", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object view = param.thisObject;
+                            XposedHelpers.setAdditionalInstanceField(view, KEY_PREV_STATUS,
+                                    statusName(game(view)));
+                        } catch (Throwable ignored) {
+                        }
                     }
-                }
 
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    try {
-                        Object view = param.thisObject;
-                        Object prev = XposedHelpers.getAdditionalInstanceField(view, KEY_PREV_STATUS);
-                        XposedHelpers.removeAdditionalInstanceField(view, KEY_PREV_STATUS);
-                        // 注意：SchulteStatus 的枚举常量名是 Normal/Ready/Gaming/Finished，
-                        // 不是混淆后的字段名 b/c。这里必须用 name()，否则永远不会开局。
-                        if (!"Ready".equals(prev)) return;           // 之前不是 Ready，本局早已开始
-                        if (!"Gaming".equals(statusName(game(view)))) return; // 这次 j 被拦下或未开局
-                        startRound(view);
-                    } catch (Throwable t) {
-                        MainHook.log("高级模式开局失败: " + t);
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object view = param.thisObject;
+                            Object prev = XposedHelpers.getAdditionalInstanceField(view, KEY_PREV_STATUS);
+                            XposedHelpers.removeAdditionalInstanceField(view, KEY_PREV_STATUS);
+                            // 注意：SchulteStatus 的枚举常量名是 Normal/Ready/Gaming/Finished，
+                            // 不是混淆后的字段名 b/c。这里必须用 name()，否则永远不会开局。
+                            if (!"Ready".equals(prev)) return;           // 之前不是 Ready，本局早已开始
+                            if (!"Gaming".equals(statusName(game(view)))) return; // 这次 j 被拦下或未开局
+                            startRound(view);
+                        } catch (Throwable t) {
+                            MainHook.log("高级模式开局失败: " + t);
+                        }
                     }
-                }
-            });
-            jHooked = true;
-        } catch (Throwable t) {
-            MainHook.log("高级模式 j() Hook 失败: " + t);
+                });
+                jHooked = true;
+            } catch (Throwable t) {
+                MainHook.log("高级模式 j() Hook 失败: " + t);
+            }
         }
 
-        try {
-            XposedBridge.hookAllMethods(viewCls, "i", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    try {
-                        if (param.args.length != 1 || param.args[0] != null) return;
-                        Object view = param.thisObject;
-                        XposedHelpers.removeAdditionalInstanceField(view, KEY_ROUND);
-                        hideOverlay(Ui.findActivity(((View) view).getContext()));
-                    } catch (Throwable ignored) {
+        if (!iHooked) {
+            try {
+                XposedBridge.hookAllMethods(viewCls, "i", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            if (param.args.length != 1 || param.args[0] != null) return;
+                            Object view = param.thisObject;
+                            XposedHelpers.removeAdditionalInstanceField(view, KEY_ROUND);
+                            hideOverlay(Ui.findActivity(((View) view).getContext()));
+                        } catch (Throwable ignored) {
+                        }
                     }
-                }
-            });
-        } catch (Throwable t) {
-            MainHook.log("高级模式 i() Hook 失败: " + t);
+                });
+                iHooked = true;
+            } catch (Throwable t) {
+                MainHook.log("高级模式 i() Hook 失败: " + t);
+            }
         }
 
         // 高级模式下屏蔽 App 自带「重开预设」的时间/错误阈值，重开节奏完全由本模块控制
-        Class<?> helperCls = XposedHelpers.findClassIfExists(RESTART_HELPER, cl);
-        if (helperCls != null) {
-            XC_MethodHook block = new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    try {
-                        if (advancedActivity(param.thisObject)) param.setResult(null);
-                    } catch (Throwable ignored) {
+        if (!restartBlocked) {
+            Class<?> helperCls = XposedHelpers.findClassIfExists(RESTART_HELPER, cl);
+            if (helperCls != null) {
+                XC_MethodHook block = new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            if (advancedActivity(param.thisObject)) param.setResult(null);
+                        } catch (Throwable ignored) {
+                        }
                     }
+                };
+                boolean ok = true;
+                try {
+                    XposedHelpers.findAndHookMethod(helperCls, "d", long.class, block);
+                } catch (Throwable t) {
+                    ok = false;
+                    MainHook.log("高级模式屏蔽时间重开失败: " + t);
                 }
-            };
-            try {
-                XposedHelpers.findAndHookMethod(helperCls, "d", long.class, block);
-            } catch (Throwable t) {
-                MainHook.log("高级模式屏蔽时间重开失败: " + t);
-            }
-            try {
-                XposedHelpers.findAndHookMethod(helperCls, "b", int.class, block);
-                restartBlocked = true;
-            } catch (Throwable t) {
-                MainHook.log("高级模式屏蔽错误重开失败: " + t);
+                try {
+                    XposedHelpers.findAndHookMethod(helperCls, "b", int.class, block);
+                } catch (Throwable t) {
+                    ok = false;
+                    MainHook.log("高级模式屏蔽错误重开失败: " + t);
+                }
+                restartBlocked = ok;
             }
         }
+
+        installChartHooks(cl);
     }
+
+    /** 成绩面板曲线：倒序/归中把 x 轴的「序号」改成实际点的数字 */
+    private static void installChartHooks(ClassLoader cl) {
+        if (chartHooked) return;
+        Class<?> axisCls = XposedHelpers.findClassIfExists(AXIS_FORMATTER, cl);
+        if (axisCls != null) {
+            try {
+                XposedHelpers.findAndHookMethod(axisCls, "getFormattedValue", float.class,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                try {
+                                    decorateAxis(param);
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        });
+            } catch (Throwable t) {
+                MainHook.log("成绩曲线坐标轴改写失败: " + t);
+            }
+        }
+        Class<?> markerCls = XposedHelpers.findClassIfExists(RESULT_MARKER, cl);
+        if (markerCls != null) {
+            try {
+                XposedBridge.hookAllMethods(markerCls, "refreshContent", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            decorateMarker(param);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+            } catch (Throwable t) {
+                MainHook.log("成绩曲线提示改写失败: " + t);
+            }
+        }
+        // 两个类都在（且没报错）才算装好；否则下次 onResume 再试
+        chartHooked = axisCls != null && markerCls != null;
+    }
+
+    private static void decorateAxis(XC_MethodHook.MethodHookParam param) {
+        int mode = chartMode;
+        int n = chartN;
+        if ((mode != REVERSE && mode != MID) || n <= 0) return;
+        Object res = param.getResult();
+        if (!(res instanceof String)) return;
+        int k = parseInt((String) res);
+        if (k <= 0) return;
+        param.setResult(String.valueOf(numberAt(mode, n, k)));
+    }
+
+    private static void decorateMarker(XC_MethodHook.MethodHookParam param) {
+        int mode = chartMode;
+        int n = chartN;
+        if ((mode != REVERSE && mode != MID) || n <= 0) return;
+        if (param.args.length < 1 || param.args[0] == null) return;
+        try {
+            // 用 Entry.x 反推序号（不要解析现有文本，避免重复刷新时把自己改过的数字当序号）
+            float x = (Float) XposedHelpers.callMethod(param.args[0], "getX");
+            int k = (int) x + 1;
+            if (k <= 0) return;
+            TextView first = (TextView) XposedHelpers.getObjectField(param.thisObject, "f");
+            first.setText("序号: " + k + " · 数字 " + numberAt(mode, n, k));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static int parseInt(String s) {
+        if (s == null) return -1;
+        int end = s.length();
+        int start = end;
+        while (start > 0 && Character.isDigit(s.charAt(start - 1))) start--;
+        if (start == end) return -1;
+        try {
+            return Integer.parseInt(s.substring(start, end));
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** k = 第几个（1 开始）→ 该模式下实际应该点击的数字 */
+    static int numberAt(int mode, int n, int k) {
+        int total = n * n;
+        switch (mode) {
+            case REVERSE:
+                return total - (k - 1);
+            case MID:
+                return (k % 2 == 1) ? (k + 1) / 2 : total - (k - 1) / 2;
+            default:
+                return k;
+        }
+    }
+
 
     /** 模式弹窗里展示的一行状态：能直接确认运行版本与接管是否成功 */
     static String statusText() {
         if (eHooked && jHooked) {
             return "已接管·重读" + (SchulteHooks.resumeHooked ? "✓" : "✗")
-                    + (restartBlocked ? "" : "（重开拦截未装）");
+                    + (iHooked ? "" : "·重置未装")
+                    + (SchulteHooks.officialHooked ? "" : "·官方拦截未装")
+                    + (restartBlocked ? "" : "·重开拦截未装");
         }
         StringBuilder sb = new StringBuilder("未接管");
         if (!eHooked) sb.append("·e");
@@ -372,10 +517,10 @@ public final class AdvancedSchulte {
         updateInfo(c, r);
 
         if (r.mode == MAXN && found > 1) {
-            double limit = limitFor(r.n);
+            double limit = limitFor(c, r.n);
             if (gap > limit * 1000.0) {
                 fail(view, r, String.format(Locale.US,
-                        "间隔 %.2fs > %.2fs，重开", gap / 1000.0, limit), 850);
+                        "间隔 %.2fs > %s，重开", gap / 1000.0, limitText(c, r.n)), 850);
                 return;
             }
         }
@@ -386,6 +531,14 @@ public final class AdvancedSchulte {
         }
 
         r.lastCorrectAt = now;
+        if (r.mode == SPEED) {
+            // 目标 x 可能刚在弹窗里改过：以最新设置为准，保证「到 x 就结束」
+            int latest = target(SPEED, r.n, Prefs.advX(c));
+            if (latest != r.x) {
+                r.x = latest;
+                updateInfo(c, r);
+            }
+        }
         if (found >= r.x) complete(view, r, now);
     }
 
@@ -413,6 +566,11 @@ public final class AdvancedSchulte {
             r.type = (Integer) XposedHelpers.callMethod(g, "l");
         } catch (Throwable ignored) {
             r.type = 0;
+        }
+        try {
+            r.blind = (Boolean) XposedHelpers.callMethod(g, "m");
+        } catch (Throwable ignored) {
+            r.blind = false;
         }
         r.hides = r.type == 1 || r.type == 2;
         r.startAt = SystemClock.elapsedRealtime();
@@ -449,15 +607,36 @@ public final class AdvancedSchulte {
         restoreBar(act);
         showDrawerMenu(act);
 
-        if (!record && Prefs.autoNextNoRecord(c)) {
-            restart(view, r, 220);
-            return;
-        }
         // 成绩显示完全交给官方弹窗：用模块回放助手的数据构造官方 SchulteRecord，
-        // 再塞一个本地 SchulteSuccess（不上传、不写官方数据库），新纪录判定也走官方逻辑
+        // 再塞一个本地 SchulteSuccess（不上传、不写官方数据库），新纪录判定也走官方逻辑。
+        // 注意：高级模式始终展示成绩，不再走「非新纪录静默重开」。
         if (!showOfficialResult(act, view, r, best, record)) {
-            restart(view, r, 900);
+            showScoreFallback(act, view, r, shown, best, record);
         }
+    }
+
+    /** 官方标签：按 type/blind 取官方叫法，再拼高级模式的短名，如「简单-顺序」 */
+    private static String modeLabel(Round r) {
+        String base;
+        if (r.type == 2) base = "简单打乱";
+        else if (r.type == 3) base = "打乱";
+        else if (r.blind) base = (r.type == 1 ? "简单盲玩" : "盲玩");
+        else base = (r.type == 1 ? "简单" : "普通");
+        int mode = (r.mode >= 0 && r.mode < SHORT.length) ? r.mode : MODE_OFF;
+        if (mode == MODE_OFF) return base;
+        return base + "-" + SHORT[mode];
+    }
+
+    /** 官方成绩面板不可用时的兜底：自绘一层同样的成绩信息，随后自动下一把 */
+    private static void showScoreFallback(Activity act, Object view, Round r,
+                                          long shown, long best, boolean record) {
+        if (act == null) return;
+        String sub = String.format(Locale.US, "反应 %.2fs · 错误 %d · 最佳 %s%s",
+                Math.max(0L, r.reaction) / 1000.0, r.errors,
+                best <= 0 ? "--" : fmt(record ? shown : best),
+                record ? " · 新纪录" : "");
+        showOverlay(act, r.mode, modeLabel(r), fmt(shown), sub, accent(r.mode), false);
+        restart(view, r, 1500);
     }
 
     /**
@@ -481,6 +660,11 @@ public final class AdvancedSchulte {
             XposedHelpers.callMethod(rec, "t", time);
             XposedHelpers.callMethod(rec, "u", r.taps);
             XposedHelpers.callMethod(rec, "p", r.idx);
+            // 反应时间用本局点 1 的实测值（官方是在第 2 个正确点击时取表，短局会显示 0）
+            try {
+                XposedHelpers.callMethod(rec, "s", (int) Math.max(1L, r.reaction));
+            } catch (Throwable ignored) {
+            }
             Object record = XposedHelpers.callMethod(rec, "l");
             if (record == null) return false;
             // l() 里的时间是「用时 + 误点次数 × 1s」，与实际展示保持一致
@@ -504,6 +688,16 @@ public final class AdvancedSchulte {
             Object dlg = XposedHelpers.newInstance(dlgCls,
                     new Class<?>[]{record.getClass(), successCls, boolean.class},
                     record, success, Boolean.FALSE);
+            // 标题改成「简单-顺序」这类高级模式标签（官方只认 type/blind，不会带高级模式信息）
+            try {
+                Object binding = XposedHelpers.getObjectField(dlg, "b");
+                TextView modeTv = (TextView) XposedHelpers.getObjectField(binding, "T");
+                modeTv.setText(modeLabel(r));
+            } catch (Throwable t) {
+                MainHook.log("高级模式成绩标题改写失败: " + t);
+            }
+            chartMode = r.mode;
+            chartN = r.n;
             XposedHelpers.callMethod(dlg, "u", Proxy.newProxyInstance(cl,
                     new Class<?>[]{callbackCls}, new InvocationHandler() {
                         @Override
@@ -515,14 +709,23 @@ public final class AdvancedSchulte {
             ((Dialog) dlg).setOnDismissListener(new DialogInterface.OnDismissListener() {
                 @Override
                 public void onDismiss(DialogInterface dialog) {
+                    chartMode = MODE_OFF;
                     restart(view, r, 0);
                 }
             });
             ((Dialog) dlg).show();
-            MainHook.log("高级模式完成，已按官方成绩显示: " + NAMES[r.mode] + " " + time + "ms"
+            if (!((Dialog) dlg).isShowing()) {
+                // 官方 f4.c.show() 会静默吞异常，这里必须自己确认窗口真的出来了
+                chartMode = MODE_OFF;
+                MainHook.log("高级模式官方成绩面板未显示: " + modeLabel(r));
+                return false;
+            }
+            MainHook.log("高级模式完成，已按官方成绩显示: " + modeLabel(r) + " " + time + "ms"
                     + " 新纪录=" + isRecord);
             return true;
         } catch (Throwable t) {
+            chartMode = MODE_OFF;
+            chartN = 0;
             MainHook.log("高级模式官方结算失败: " + t);
             return false;
         }
@@ -758,13 +961,24 @@ public final class AdvancedSchulte {
         return total;
     }
 
-    private static double limitFor(int n) {
+    /** max≤N 的内置间隔参考值（ms）：弹窗里给「留空 = 内置 …」的提示用 */
+    static long builtinMaxGapMs(int n) {
+        if (n >= 3 && n <= 10) return Math.round(MAX_GAP[n] * 1000f);
+        return 1000L;
+    }
+
+    /** max≤N 的间隔上限（秒）：优先用模块设置里的自定义 ms，未设置时用内置参考表 */
+    private static double limitFor(Context c, int n) {
+        int ms = Prefs.advMaxGapMs(c);
+        if (ms > 0) return ms / 1000.0;
         if (n >= 3 && n <= 10) return MAX_GAP[n];
         return 1.0;
     }
 
-    private static String limitText(int n) {
-        return String.format(Locale.US, "%.2fs", limitFor(n));
+    private static String limitText(Context c, int n) {
+        double limit = limitFor(c, n);
+        return String.format(Locale.US, "%.2fs%s",
+                limit, Prefs.advMaxGapMs(c) > 0 ? "（自定义）" : "");
     }
 
     private static void syncGame(Object game, Round r) {
