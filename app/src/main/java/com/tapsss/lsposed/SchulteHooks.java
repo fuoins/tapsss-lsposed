@@ -34,17 +34,6 @@ public final class SchulteHooks {
     static void install(ClassLoader cl) {
         Class<?> viewCls = XposedHelpers.findClassIfExists(VIEW, cl);
         if (viewCls != null) {
-            XposedBridge.hookAllConstructors(viewCls, new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    try {
-                        applyCountdownConfig((View) param.thisObject);
-                    } catch (Throwable t) {
-                        MainHook.log("应用倒计时配置失败: " + t);
-                    }
-                }
-            });
-
             try {
                 XposedHelpers.findAndHookMethod(viewCls, "onTouchEvent", MotionEvent.class,
                         new XC_MethodHook() {
@@ -98,6 +87,19 @@ public final class SchulteHooks {
             }
         }
 
+        // 舒尔特倒计时时长的输入框：去掉 App 自带的下限（原版构造 NumberInterceptor 时传入 min>0）
+        Class<?> rangeCls = XposedHelpers.findClassIfExists(RANGE, cl);
+        if (rangeCls != null) {
+            XposedBridge.hookAllConstructors(rangeCls, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args.length != 2 || !(param.args[0] instanceof Integer)) return;
+                    if (!fromSchulteStart()) return;
+                    param.args[0] = Integer.valueOf(0);
+                }
+            });
+        }
+
         Class<?> barCls = XposedHelpers.findClassIfExists(ACTION_BAR, cl);
         if (barCls != null) {
             try {
@@ -136,16 +138,16 @@ public final class SchulteHooks {
     static final String KEY_BYPASS_BUSY = "tapsss_bypass_busy";
     private static final String ACTIVITY =
             "com.star.minesweeping.ui.activity.game.schulte.SchulteGameActivity";
+    private static final String RANGE = "com.star.minesweeping.k.b.h4.l";
+    private static final String SCHULTE_START_ACTIVITY =
+            "com.star.minesweeping.ui.activity.setting.game.SettingSchulteStartActivity";
 
-    private static void applyCountdownConfig(View view) {
-        Context c = view.getContext();
-        Prefs.get(c);
-        if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c)) return;
-
-        XposedHelpers.setBooleanField(view, "y", Prefs.countdownEnabled(c));
-        if (Prefs.countdownEnabled(c)) {
-            XposedHelpers.setLongField(view, "z", Prefs.countdownMs(c));
+    /** NumberInterceptor 也被其它设置页使用，只在舒尔特「开始」页构造时去下限 */
+    private static boolean fromSchulteStart() {
+        for (StackTraceElement e : Thread.currentThread().getStackTrace()) {
+            if (SCHULTE_START_ACTIVITY.equals(e.getClassName())) return true;
         }
+        return false;
     }
 
     private static final String KEY_UNTIL = "tapsss_countdown_until";
@@ -162,12 +164,27 @@ public final class SchulteHooks {
             return;
         }
         Context c = ((View) view).getContext();
-        if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c) || !Prefs.countdownEnabled(c)) {
+        if (!Prefs.moduleEnabled(c)) {
+            XposedHelpers.removeAdditionalInstanceField(view, KEY_UNTIL);
+            return;
+        }
+        // 倒计时开关与时长都跟随 App 自己的设置（字段 y/z），模块只做拦截
+        boolean enabled;
+        long ms;
+        try {
+            enabled = XposedHelpers.getBooleanField(view, "y");
+            ms = XposedHelpers.getLongField(view, "z");
+        } catch (Throwable t) {
+            MainHook.log("读取倒计时配置失败: " + t);
+            XposedHelpers.removeAdditionalInstanceField(view, KEY_UNTIL);
+            return;
+        }
+        if (!enabled || ms <= 0) {
             XposedHelpers.removeAdditionalInstanceField(view, KEY_UNTIL);
             return;
         }
         XposedHelpers.setAdditionalInstanceField(view, KEY_UNTIL,
-                Long.valueOf(SystemClock.elapsedRealtime() + Prefs.countdownMs(c)));
+                Long.valueOf(SystemClock.elapsedRealtime() + ms));
     }
 
     private static long countdownUntil(Object view) {
@@ -182,7 +199,7 @@ public final class SchulteHooks {
         if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_POINTER_DOWN) return;
 
         Context c = ((View) view).getContext();
-        if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c) || !Prefs.blockTouch(c)) return;
+        if (!Prefs.moduleEnabled(c) || !Prefs.blockTouch(c)) return;
 
         long until = countdownUntil(view);
         if (until <= 0 || SystemClock.elapsedRealtime() >= until) return; // 不在倒计时中
@@ -197,7 +214,7 @@ public final class SchulteHooks {
         ImageView icon = (ImageView) result;
 
         Context c = icon.getContext();
-        if (!Prefs.moduleEnabled(c) || !Prefs.schulteEnabled(c) || !Prefs.modeSwitch(c)) return;
+        if (!Prefs.moduleEnabled(c)) return;
 
         Activity act = Ui.findActivity(c);
         if (act == null || !act.getClass().getName().endsWith("SchulteGameActivity")) return;

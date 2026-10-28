@@ -4,11 +4,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
-import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -43,50 +42,45 @@ public final class ModuleSettings {
     static void showSchulte(final Activity act) {
         final Context c = act;
         LinearLayout root = vertical(c);
-        root.addView(hint(c, "修改后重新进入游戏生效"));
+        root.addView(hint(c, "以下为本模块新增的功能，App 原有设置（如开始倒计时）保持不变"));
 
-        final CheckBox cbEnable = check(c, "启用舒尔特增强", Prefs.schulteEnabled(c));
-        final CheckBox cbCount = check(c, "开始倒计时（关闭后点击立即开始）", Prefs.countdownEnabled(c));
-        final CheckBox cbBlock = check(c, "倒计时期间点击不开始", Prefs.blockTouch(c));
-        final CheckBox cbMode = check(c, "右上角阶数弹窗加入模式切换", Prefs.modeSwitch(c));
-        root.addView(cbEnable);
-        root.addView(cbCount);
+        final CheckBox cbBlock = check(c, "取消倒计时期间点击会立即开始", Prefs.blockTouch(c));
         root.addView(cbBlock);
-        root.addView(cbMode);
+        root.addView(hint(c, "勾选后：倒计时期间点击棋盘不会跳过倒计时"));
 
-        root.addView(hint(c, "倒计时时长（毫秒，填 0 表示不等待）"));
-        final EditText et = new EditText(c);
-        et.setInputType(InputType.TYPE_CLASS_NUMBER);
-        et.setSingleLine(true);
-        et.setText(String.valueOf(Prefs.countdownMs(c)));
-        et.setSelectAllOnFocus(true);
-        root.addView(et, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(feature(c, "右上角阶数弹窗增强"));
+        root.addView(feature(c, "倒计时取消下限限制"));
+        root.addView(feature(c, "重开预设"));
 
         showDialog(act, "舒尔特方格", root, "保存", new Runnable() {
             @Override
             public void run() {
-                Prefs.setBool(c, Prefs.SCHULTE_ENABLED, cbEnable.isChecked());
-                Prefs.setBool(c, Prefs.COUNTDOWN_ENABLED, cbCount.isChecked());
                 Prefs.setBool(c, Prefs.BLOCK_TOUCH, cbBlock.isChecked());
-                Prefs.setBool(c, Prefs.MODE_SWITCH, cbMode.isChecked());
-
-                int ms;
-                try {
-                    ms = Integer.parseInt(et.getText().toString().trim());
-                } catch (Throwable t) {
-                    ms = 3000;
-                }
-                int clamped = Prefs.clampMs(ms);
-                Prefs.setInt(c, Prefs.COUNTDOWN_MS, clamped);
-                if (clamped != ms) {
-                    Ui.toast(c, "倒计时时长已调整为 " + clamped + " 毫秒（0~60000）");
-                } else {
-                    Ui.toast(c, "已保存");
-                }
+                Ui.toast(c, "已保存");
             }
         });
+    }
+
+    /** 无开关的功能项：左侧功能名，右侧固定「已启用」 */
+    private static View feature(Context c, String label) {
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(c, 10), 0, Ui.dp(c, 10));
+
+        TextView name = new TextView(c);
+        name.setText(label);
+        name.setTextSize(16);
+        row.addView(name, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView state = new TextView(c);
+        state.setText("已启用");
+        state.setTextSize(13);
+        state.setAlpha(0.6f);
+        row.addView(state, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        return row;
     }
 
     static void showAccount(final Activity act) {
@@ -127,9 +121,9 @@ public final class ModuleSettings {
     private static void showAbout(final Activity act) {
         LinearLayout root = vertical(act);
         TextView tv = new TextView(act);
-        tv.setText("扫雷联萌增强 v1.0.5\n\n"
-                + "· 舒尔特：开始倒计时（可设为 0 直接开始）、倒计时期间点击不开始、"
-                + "右上角阶数弹窗内可直接切换模式与阶数\n"
+        tv.setText("扫雷联萌增强 v1.0.6\n\n"
+                + "· 舒尔特功能：倒计时期间点击不直接开始（可关闭）、"
+                + "右上角阶数弹窗内直接切换模式、倒计时时长下限取消（可设为 0）、重开预设\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
                 + "适用版本：扫雷联萌 3.6.x\n"
                 + "使用方式：在 LSPosed 中启用模块，作用域勾选「扫雷联萌」，"

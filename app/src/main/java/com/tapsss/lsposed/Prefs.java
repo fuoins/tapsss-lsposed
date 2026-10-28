@@ -12,18 +12,11 @@ public final class Prefs {
     private static final String FILE = "tapsss_module";
 
     public static final String MODULE_ENABLED = "module_enabled";
-    public static final String SCHULTE_ENABLED = "schulte_enabled";
-    public static final String COUNTDOWN_ENABLED = "schulte_countdown";
-    public static final String COUNTDOWN_MS = "schulte_countdown_ms";
     public static final String BLOCK_TOUCH = "schulte_block_touch";
-    public static final String MODE_SWITCH = "schulte_mode_switch";
     public static final String AUTO_RELOGIN = "auto_relogin";
     public static final String SAVED_UID = "saved_uid";
     public static final String SAVED_PWD = "saved_pwd";
     public static final String TILE_SEEDED = "module_tile_seeded";
-
-    public static final int MIN_COUNTDOWN_MS = 0;
-    public static final int MAX_COUNTDOWN_MS = 60000;
 
     private static volatile SharedPreferences sp;
 
@@ -47,11 +40,6 @@ public final class Prefs {
         return p == null ? def : p.getBoolean(key, def);
     }
 
-    private static int integer(Context c, String key, int def) {
-        SharedPreferences p = get(c);
-        return p == null ? def : p.getInt(key, def);
-    }
-
     private static String str(Context c, String key) {
         SharedPreferences p = get(c);
         return p == null ? "" : p.getString(key, "");
@@ -61,25 +49,8 @@ public final class Prefs {
         return bool(c, MODULE_ENABLED, true);
     }
 
-    public static boolean schulteEnabled(Context c) {
-        return bool(c, SCHULTE_ENABLED, true);
-    }
-
-    public static boolean countdownEnabled(Context c) {
-        return bool(c, COUNTDOWN_ENABLED, true);
-    }
-
-    /** 倒计时时长，0 表示不等待；上限 60000ms */
-    public static long countdownMs(Context c) {
-        return clampMs(integer(c, COUNTDOWN_MS, 3000));
-    }
-
     public static boolean blockTouch(Context c) {
         return bool(c, BLOCK_TOUCH, true);
-    }
-
-    public static boolean modeSwitch(Context c) {
-        return bool(c, MODE_SWITCH, true);
     }
 
     public static boolean autoRelogin(Context c) {
@@ -103,20 +74,9 @@ public final class Prefs {
         setBool(c, TILE_SEEDED, v);
     }
 
-    public static int clampMs(int ms) {
-        if (ms < MIN_COUNTDOWN_MS) return MIN_COUNTDOWN_MS;
-        if (ms > MAX_COUNTDOWN_MS) return MAX_COUNTDOWN_MS;
-        return ms;
-    }
-
     public static void setBool(Context c, String key, boolean value) {
         SharedPreferences p = get(c);
         if (p != null) p.edit().putBoolean(key, value).apply();
-    }
-
-    public static void setInt(Context c, String key, int value) {
-        SharedPreferences p = get(c);
-        if (p != null) p.edit().putInt(key, value).apply();
     }
 
     public static void saveCredentials(Context c, String uid, String pwd) {

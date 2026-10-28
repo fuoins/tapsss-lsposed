@@ -11,9 +11,12 @@
 
 ### 舒尔特方格
 
-- **开始倒计时**：可关闭；开启时倒计时时长可调，范围 **0–60000 毫秒**（填 0 表示不等待，默认 3000ms）。
-- **倒计时期间点击不开始**：倒计时进行中点击棋盘不会跳过倒计时直接开局，并弹提示。
-- **阶数弹窗加入模式切换**：点游戏右上角「阶数」按钮，弹窗内可同时切换 **模式**（简单 / 简单·盲打 / 普通 / 普通·盲打 / 混合·简单 / 混合）和 **阶数**（3–10）。
+> 模块设置里列出的都是模块新增的功能；App 自带的「开始倒计时」等设置保持原样，模块不再重复提供。
+
+- **倒计时期间点击不直接开始（可关闭）**：倒计时进行中点击棋盘不会跳过倒计时直接开局，并弹提示；关闭后恢复 App 原行为。
+- **右上角阶数弹窗增强**：点游戏右上角「阶数」按钮，弹窗内可同时切换 **模式**（简单 / 简单·盲打 / 普通 / 普通·盲打 / 混合·简单 / 混合）和 **阶数**（3–10）。
+- **倒计时取消下限限制**：舒尔特倒计时时长可设为 0（不等待），不再受 App 自带的毫秒下限限制。
+- **重开预设**：默认启用。
 
 ### 账号与登录
 
@@ -52,8 +55,8 @@ GitHub Actions 会自动构建并上传 APK（见 `.github/workflows/build.yml`�
 | 功能 | Hook 点 |
 | --- | --- |
 | 设置页入口 | `SettingActivity.init()` 后，在 `common_layout`（通用）下方插入同级区块：标题「模块设置」+ 舒尔特方格 / 账号与登录 / 「…」，视图结构与 `activity_setting.xml` 里其它区块一致（`MenuTitleText` + `layout_selector_background_radius_4`） |
-| 倒计时开关/时长 | `SchulteView` 构造后改写字段 `y`(启用) / `z`(毫秒) |
-| 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底 |
+| 舒尔特功能页 | 设置页 `SettingSchulteStartActivity.init()` 后替换「倒计时时长」输入框的 NumberInterceptor 下限为 0（限舒尔特页生效）；功能开关/时长均跟随 App 自带设置 |
+| 倒计时点击拦截 | `SchulteView.onTouchEvent` before：倒计时截止前吞掉 DOWN/POINTER_DOWN；同时拦 `j(null)` 兜底；开关来自模块设置 |
 | 阶数弹窗 | `ActionBar.c(style, iconRes, listener)` after：`ic_game_level` 按钮换成 App 原生 `SquareSizeDialog`（`k.b.z3`），标题下插入一行模式选择 |
 | 快速开始入口 | 进程启动（`MinesweeperApplication.onCreate`）时把 `GameMenu("ic_setting","模块设置")` 写进快速开始列表（KV `utils.h.i`），并在「全部游戏」网格里注入同款格子；点格子可像其它游戏一样增删（`$b.p` 拦截 → 改 KV 列表 + 刷新）；点快速开始里的图标打开面板（`$a.p` 拦截 + `ActionRouter.go` 兜底） |
 | 模式切换 | 改 `Intent` 的 `type`/`blind`/`level` extras 后 `recreate()`，让 ARouter 重新注入字段并重建模式控制器 `i.c.d.c.a`；只改阶数时仍调原 `W(int)`（用一次性标记绕过 `M()` 的「游戏进行中」判断） |
