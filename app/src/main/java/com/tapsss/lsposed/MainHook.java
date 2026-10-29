@@ -12,12 +12,14 @@ public class MainHook implements IXposedHookLoadPackage {
 
     public static final String TAG = "TapsssModule";
     public static final String TARGET_PKG = "com.star.minesweeping";
+    /** 共存版只改了包名（dex 类名不变），按前缀同样接管 */
+    private static final String PKG_PREFIX = "com.star.minesweep";
     /** 与 build.gradle 的 versionName 保持一致，显示在模式弹窗里 */
-    public static final String VERSION = "1.0.17";
+    public static final String VERSION = "1.0.18";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
-        if (!TARGET_PKG.equals(lpparam.packageName)) return;
+        if (lpparam.packageName == null || !lpparam.packageName.startsWith(PKG_PREFIX)) return;
 
         log("load " + lpparam.packageName + " process=" + lpparam.processName);
 
