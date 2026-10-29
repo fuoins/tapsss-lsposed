@@ -23,7 +23,8 @@ import de.robv.android.xposed.XposedHelpers;
 /**
  * 舒尔特「重开」设置页：
  * 1) 顶部把官方右上角的模式选择换成两排滑栏标签（第一排官方模式，第二排高级模式）；
- * 2) 选中高级模式时，下方改为模块自己的「错误自动重开 / 错误数」配置（官方那套对高级模式不生效）；
+ * 2) 高级模式的重开配置直接复用官方界面（开关 + 3~10 阶错误数），
+ *    通过改写官方 KV 的 key，把高级模式的数据存到 adv<mode>_<level>，与顺序模式互不干扰；
  * 3) 顶部保留「重开预设」入口，一条预设即可批量写好所有模式 × 所有阶数。
  */
 public final class SchulteRestart {
@@ -32,6 +33,7 @@ public final class SchulteRestart {
             "com.star.minesweeping.ui.activity.setting.game.SettingSchulteRestartActivity";
     /** 配置 KV：i = 错误自动重开开关（key = type+blind），j = 错误数阈值（key = type+blind+level） */
     private static final String SCHULTE_SETTING_KV = "com.star.minesweeping.i.f.j";
+    private static final String KV_DATA = "com.star.minesweeping.data.bean.keyvalue.KVData";
 
     private static final String TAG_PRESET_BOX = "tapsss_adv_restart_preset";
     private static final String TAG_TAB_BOX = "tapsss_adv_restart_tabs";
@@ -42,7 +44,16 @@ public final class SchulteRestart {
     private static final int[] OFFICIAL_TYPE = {0, 0, 1, 1, 2, 3};
     private static final boolean[] OFFICIAL_BLIND = {false, true, false, true, false, false};
 
+    /** 当前页面选中的高级模式（0 = 顺序，不覆盖官方 key）；选中时官方 KV 读写被重写到 adv<mode>_ */
+    private static volatile int overrideAdv;
+    /** 当前页面官方模式的 KV 前缀（如 2true），用于判断哪些 key 需要改写 */
+    private static volatile String overrideBase;
+
     private static volatile boolean hooked;
+    private static ClassLoader loader;
+    private static Class<?> kvCls;
+    private static Object errEnable;
+    private static Object errCount;
 
     private SchulteRestart() {
     }
@@ -50,6 +61,7 @@ public final class SchulteRestart {
     static void install(ClassLoader cl) {
         if (hooked) return;
         try {
+            loader = cl;
             Class<?> cls = XposedHelpers.findClassIfExists(RESTART_SETTING, cl);
             if (cls == null) return;
             XposedBridge.hookAllMethods(cls, "init", new XC_MethodHook() {
@@ -62,9 +74,84 @@ public final class SchulteRestart {
                     }
                 }
             });
+            // 离开页面立刻恢复官方 key，避免影响游戏里读配置
+            XposedBridge.hookAllMethods(cls, "onPause", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    overrideAdv = 0;
+                    overrideBase = null;
+                }
+            });
+            // 官方 KV 的 key 改写：选高级模式时，页面上的开关 / 阶数条目读写的是
+            // adv<mode>_<suffix>，界面上完全还是官方那套控件
+            try {
+                Class<?> kv = XposedHelpers.findClass(KV_DATA, cl);
+                XC_MethodHook rewrite = new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        rewriteKey(param);
+                    }
+                };
+                XposedBridge.hookAllMethods(kv, "getValue", rewrite);
+                XposedBridge.hookAllMethods(kv, "setValue", rewrite);
+            } catch (Throwable t) {
+                MainHook.log("重开页 KV 改写 Hook 失败: " + t);
+            }
             hooked = true;
         } catch (Throwable t) {
             MainHook.log("重开页 Hook 失败: " + t);
+        }
+    }
+
+    // ------------------------------------------------------------------ KV 改写
+
+    private static void rewriteKey(XC_MethodHook.MethodHookParam param) {
+        int adv = overrideAdv;
+        String base = overrideBase;
+        if (adv <= 0 || base == null || param.args.length == 0) return;
+        if (!(param.args[0] instanceof String)) return;
+        if (!ensureKv()) return;
+        Object self = param.thisObject;
+        if (self != errEnable && self != errCount) return;
+        String key = (String) param.args[0];
+        if (!key.startsWith(base)) return;
+        param.args[0] = "adv" + adv + "_" + key.substring(base.length());
+    }
+
+    private static boolean ensureKv() {
+        if (errEnable != null && errCount != null) return true;
+        if (loader == null) return false;
+        try {
+            if (kvCls == null) kvCls = XposedHelpers.findClass(SCHULTE_SETTING_KV, loader);
+            errEnable = XposedHelpers.getStaticObjectField(kvCls, "i");
+            errCount = XposedHelpers.getStaticObjectField(kvCls, "j");
+            return errEnable != null && errCount != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 高级模式重开：是否开启（adv<mode>_ 的开关） */
+    static boolean advErrEnabled(int mode) {
+        ensureKv();
+        if (errEnable == null) return false;
+        try {
+            Object v = XposedHelpers.callMethod(errEnable, "getValue", "adv" + mode + "_");
+            return v instanceof Boolean && (Boolean) v;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 高级模式重开：该阶数下的错误数阈值 */
+    static int advErrLimit(int mode, int n) {
+        ensureKv();
+        if (errCount == null) return 1;
+        try {
+            Object v = XposedHelpers.callMethod(errCount, "getValue", "adv" + mode + "_" + n);
+            return v instanceof Integer ? Math.max(1, (Integer) v) : 1;
+        } catch (Throwable t) {
+            return 1;
         }
     }
 
@@ -122,15 +209,12 @@ public final class SchulteRestart {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
-    // ------------------------------------------------------------------ 两排标签 + 高级模式面板
+    // ------------------------------------------------------------------ 两排标签
 
     private static final class TabUi {
         LinearLayout box;
         ViewGroup officialRow;
         ViewGroup advRow;
-        LinearLayout panel;
-        TextView restartValue;
-        TextView countValue;
         int adv;
     }
 
@@ -173,82 +257,7 @@ public final class SchulteRestart {
         box.addView(advRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(act, 38)));
 
-        LinearLayout panel = new LinearLayout(act);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setVisibility(View.GONE);
-        panel.setPadding(Ui.dp(act, 12), 0, Ui.dp(act, 12), Ui.dp(act, 4));
-
-        ui.restartValue = panelRow(act, panel, "错误自动重开", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                int adv = Math.max(1, ui.adv);
-                Prefs.setAdvErrRestart(act, adv, !Prefs.advErrRestart(act, adv));
-                renderPanel(act, ui);
-            }
-        });
-        ui.countValue = panelRow(act, panel, "错误数（错几次后重开）", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                pickCount(act, ui);
-            }
-        });
-        ui.panel = panel;
-        panel.setTag(ui);
-        box.addView(panel, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        TextView hint = new TextView(act);
-        hint.setText("高级模式下的重开由模块控制，与官方顺序模式的配置互不影响；"
-                + "「顺序」表示按官方配置执行。");
-        hint.setTextSize(10);
-        hint.setAlpha(0.5f);
-        hint.setPadding(0, Ui.dp(act, 4), 0, Ui.dp(act, 8));
-        box.addView(hint, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
         return box;
-    }
-
-    private static TextView panelRow(Activity act, LinearLayout panel, String title,
-                                     View.OnClickListener click) {
-        LinearLayout row = new LinearLayout(act);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, Ui.dp(act, 9), 0, Ui.dp(act, 9));
-        row.setClickable(true);
-        row.setOnClickListener(click);
-
-        TextView label = new TextView(act);
-        label.setText(title);
-        label.setTextSize(14);
-        label.setTextColor(color(act, "dark", 0xFF283437));
-        row.addView(label, new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-        TextView value = new TextView(act);
-        value.setTextSize(14);
-        value.setTextColor(color(act, "normal", 0xFF888888));
-        row.addView(value, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        panel.addView(row, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        View divider = new View(act);
-        divider.setBackgroundColor(0x14000000);
-        panel.addView(divider, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, Ui.dp(act, 0.5f))));
-        return value;
-    }
-
-    private static void renderPanel(Activity act, TabUi ui) {
-        if (ui == null || ui.restartValue == null) return;
-        int adv = Math.max(1, ui.adv);
-        boolean on = Prefs.advErrRestart(act, adv);
-        int n = Math.max(1, Prefs.advErrCount(act, adv));
-        ui.restartValue.setText(on ? "已开启" : "已关闭");
-        ui.restartValue.setTextColor(color(act, on ? "game_schulte" : "normal",
-                on ? 0xFF2ED47A : 0xFF888888));
-        ui.countValue.setText(n + " 次");
     }
 
     private static void pickOfficial(Activity act, TabUi ui, int index) {
@@ -260,50 +269,54 @@ public final class SchulteRestart {
             MainHook.log("重开页切换官方模式失败: " + t);
         }
         AdvancedPages.applyChipState(ui.officialRow, index);
+        if (overrideAdv > 0) {
+            overrideBase = base(act);
+            refreshOfficial(act);
+        }
     }
 
     private static void pickAdv(Activity act, TabUi ui, int adv) {
         ui.adv = adv;
         AdvancedPages.applyChipState(ui.advRow, adv);
-        boolean advOn = adv > 0;
-        ui.panel.setVisibility(advOn ? View.VISIBLE : View.GONE);
-        showOfficialError(act, !advOn);
-        if (advOn) renderPanel(act, ui);
+        overrideAdv = adv;
+        overrideBase = adv > 0 ? base(act) : null;
+        refreshOfficial(act);
     }
 
-    private static void pickCount(final Activity act, final TabUi ui) {
-        final int adv = Math.max(1, ui.adv);
-        String[] items = new String[10];
-        for (int i = 0; i < items.length; i++) items[i] = (i + 1) + " 次";
+    private static String base(Activity act) {
         try {
-            new AlertDialog.Builder(act)
-                    .setTitle(AdvancedSchulte.SHORT[adv] + "：错误数（错几次后重开）")
-                    .setSingleChoiceItems(items, Math.max(1, Prefs.advErrCount(act, adv)) - 1,
-                            new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface dialog, int which) {
-                                    Prefs.setAdvErrCount(act, adv, which + 1);
-                                    dialog.dismiss();
-                                    renderPanel(act, ui);
-                                }
-                            })
-                    .setNegativeButton("取消", null)
-                    .show();
+            return XposedHelpers.getIntField(act, "a")
+                    + String.valueOf(XposedHelpers.getBooleanField(act, "b"));
         } catch (Throwable t) {
-            MainHook.log("错误数选择失败: " + t);
+            return null;
         }
     }
 
-    /** 选中高级模式时隐藏官方「重开时错误」整块（标题 + 开关 + 8 个阶数） */
-    private static void showOfficialError(Activity act, boolean show) {
-        View anchor = findById(act, "error_restart_item");
-        if (anchor == null || !(anchor.getParent() instanceof ViewGroup)) return;
-        ViewGroup parent = (ViewGroup) anchor.getParent();
-        int start = Math.max(0, parent.indexOfChild(anchor) - 1);
-        int count = Math.min(10, parent.getChildCount() - start);
-        for (int i = 0; i < count; i++) {
-            View v = parent.getChildAt(start + i);
-            if (v != null) v.setVisibility(show ? View.VISIBLE : View.GONE);
+    /** 让官方控件按当前 key（顺序 = 官方 key，高级模式 = adv<mode>_）重读一遍 */
+    private static void refreshOfficial(Activity act) {
+        if (!ensureKv()) return;
+        try {
+            int type = XposedHelpers.getIntField(act, "a");
+            boolean blind = XposedHelpers.getBooleanField(act, "b");
+            for (String m : new String[]{"r0", "s0"}) {
+                try {
+                    XposedHelpers.callMethod(act, m);
+                } catch (Throwable ignored) {
+                }
+            }
+            XposedHelpers.callMethod(act, "w", type, blind);
+            try {
+                Object binding = XposedHelpers.getObjectField(act, "view");
+                Object sw = XposedHelpers.getObjectField(binding, "Z");
+                Object v = XposedHelpers.callMethod(errEnable, "getValue",
+                        overrideAdv > 0 ? "adv" + overrideAdv + "_" : base(act));
+                if (sw != null && v instanceof Boolean) {
+                    XposedHelpers.callMethod(sw, "setChecked", v);
+                }
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable t) {
+            MainHook.log("重开页刷新失败: " + t);
         }
     }
 
@@ -390,45 +403,30 @@ public final class SchulteRestart {
         }
     }
 
-    /** 单个高级模式：打开错误自动重开，错误数 1 */
+    /** 单个高级模式：打开错误自动重开，所有阶数错误数设为 1（写 adv<mode>_ key） */
     private static void applyAdvPreset(Activity act, int adv) {
         try {
-            Prefs.setAdvErrRestart(act, adv, true);
-            Prefs.setAdvErrCount(act, adv, 1);
-            TabUi ui = tabsOf(act);
-            if (ui != null && ui.adv == adv) {
-                ui.panel.setVisibility(View.VISIBLE);
-                showOfficialError(act, false);
-                AdvancedPages.applyChipState(ui.advRow, adv);
-                renderPanel(act, ui);
+            if (!ensureKv()) {
+                Ui.toast(act, "高级模式预设失败：KV 未就绪");
+                return;
             }
+            XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", Boolean.TRUE);
+            for (int level = 3; level <= 10; level++) {
+                XposedHelpers.callMethod(errCount, "setValue",
+                        "adv" + adv + "_" + level, Integer.valueOf(1));
+            }
+            if (overrideAdv == adv) refreshOfficial(act);
             Ui.toast(act, "已开启：" + AdvancedSchulte.SHORT[adv] + " 错一个就重开（错误数 1）");
         } catch (Throwable t) {
             MainHook.log("高级模式预设失败: " + t);
         }
     }
 
-    private static TabUi tabsOf(Activity act) {
-        try {
-            ViewGroup content = scrollContent(act);
-            if (content == null) return null;
-            View box = content.findViewWithTag(TAG_TAB_BOX);
-            if (!(box instanceof ViewGroup)) return null;
-            ViewGroup group = (ViewGroup) box;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                Object tag = group.getChildAt(i).getTag();
-                if (tag instanceof TabUi) return (TabUi) tag;
-            }
-        } catch (Throwable ignored) {
-        }
-        return null;
-    }
-
     private static void confirmPreset(final Activity act, final boolean enable, final int count) {
         String action = enable
                 ? "会把所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
                 + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」都打开，并把错误数设为 1。"
-                + "\n\n只影响「顺序」模式（不叠加高级模式时）；高级模式请在下面各自设置。"
+                + "\n\n只影响「顺序」模式（不叠加高级模式时）；高级模式请在第二排标签里各自设置。"
                 : "会把所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
                 + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」关闭，并把错误数设为 0。";
         try {
@@ -455,21 +453,27 @@ public final class SchulteRestart {
      */
     private static void applyPreset(Activity act, boolean enable, int count) {
         try {
-            ClassLoader cl = act.getClassLoader();
-            Class<?> kvCls = XposedHelpers.findClass(SCHULTE_SETTING_KV, cl);
-            Object errEnable = XposedHelpers.getStaticObjectField(kvCls, "i");
-            Object errCount = XposedHelpers.getStaticObjectField(kvCls, "j");
+            if (!ensureKv()) return;
             Boolean flag = enable ? Boolean.TRUE : Boolean.FALSE;
             Integer value = Integer.valueOf(count);
 
-            for (int type = 0; type <= 3; type++) {
-                for (int blind = 0; blind <= 1; blind++) {
-                    String base = type + String.valueOf(blind == 1);
-                    XposedHelpers.callMethod(errEnable, "setValue", base, flag);
-                    for (int level = 3; level <= 10; level++) {
-                        XposedHelpers.callMethod(errCount, "setValue", base + level, value);
+            int savedAdv = overrideAdv;
+            String savedBase = overrideBase;
+            overrideAdv = 0;
+            overrideBase = null;
+            try {
+                for (int type = 0; type <= 3; type++) {
+                    for (int blind = 0; blind <= 1; blind++) {
+                        String base = type + String.valueOf(blind == 1);
+                        XposedHelpers.callMethod(errEnable, "setValue", base, flag);
+                        for (int level = 3; level <= 10; level++) {
+                            XposedHelpers.callMethod(errCount, "setValue", base + level, value);
+                        }
                     }
                 }
+            } finally {
+                overrideAdv = savedAdv;
+                overrideBase = savedBase;
             }
 
             // 写完后读回 8 个组合的开关值，确认真的落到了官方读的地方
@@ -478,32 +482,12 @@ public final class SchulteRestart {
             if (written < 8) {
                 // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
                 // 直接写官方 SP 落点并清空缓存后再校验一次
-                rewriteViaSp(cl, errEnable, errCount, flag, value);
+                rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
                 written = countWritten(errEnable, flag);
                 MainHook.log("重开预设二次校验: " + written + "/8");
             }
 
-            // 刷新页面：r0 = 错误设置列表，s0 = 开关/倒计时面板，w(type, blind) = 当前模式
-            for (String m : new String[]{"r0", "s0"}) {
-                try {
-                    XposedHelpers.callMethod(act, m);
-                } catch (Throwable ignored) {
-                }
-            }
-            try {
-                int type = XposedHelpers.getIntField(act, "a");
-                boolean blind = XposedHelpers.getBooleanField(act, "b");
-                XposedHelpers.callMethod(act, "w", type, blind);
-            } catch (Throwable ignored) {
-            }
-            // 页面开关是自定义 SwitchItem，w() 里刷新的是 KV 读取结果；
-            // 这里直接把「错误自动重开」开关（binding 的 Z）也同步过来，确保视觉上就是开的
-            try {
-                Object binding = XposedHelpers.getObjectField(act, "view");
-                Object sw = XposedHelpers.getObjectField(binding, "Z");
-                if (sw != null) XposedHelpers.callMethod(sw, "setChecked", flag);
-            } catch (Throwable ignored) {
-            }
+            refreshOfficial(act);
             String head = enable
                     ? "已把所有模式、所有阶数的错误自动重开打开，错误数设为 1"
                     : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0";
