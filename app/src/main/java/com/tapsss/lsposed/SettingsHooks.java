@@ -2,8 +2,10 @@ package com.tapsss.lsposed;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Resources;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -40,6 +42,10 @@ public final class SettingsHooks {
     private static final String H_UTILS = "com.star.minesweeping.utils.h";
     private static final String ROUTE = "/module/settings";
     private static final String TILE_TEXT = "模块设置";
+    private static final String ROUTE_DONATE = "/module/donate";
+    private static final String TILE_DONATE = "捐赠";
+    private static final String ICON_DONATE = "ic_alipay";
+    private static final String DONATE_URL = "https://zy520.de5.net/juanzeng/";
     private static final String TAG = "tapsss_module_section";
 
     private SettingsHooks() {
@@ -106,7 +112,21 @@ public final class SettingsHooks {
                 XposedHelpers.findAndHookMethod(routerCls, "go", String.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        if (param.args.length != 1 || !ROUTE.equals(param.args[0])) return;
+                        if (param.args.length != 1) return;
+                        String route = String.valueOf(param.args[0]);
+                        if (ROUTE_DONATE.equals(route)) {
+                            param.setResult(null);
+                            Activity act = currentActivity();
+                            if (act == null) return;
+                            try {
+                                act.startActivity(new Intent(Intent.ACTION_VIEW,
+                                        Uri.parse(DONATE_URL)));
+                            } catch (Throwable t) {
+                                Ui.toast(act, "没有可打开网页的应用");
+                            }
+                            return;
+                        }
+                        if (!ROUTE.equals(route)) return;
                         param.setResult(null);
                         Activity act = currentActivity();
                         if (act != null) ModuleSettings.show(act);
@@ -227,11 +247,29 @@ public final class SettingsHooks {
 
         List list = (List) XposedHelpers.callStaticMethod(hCls, "c");
         if (list == null) return; // KV 未初始化时不强写，避免把默认列表覆盖成空
+        boolean changed = false;
         if (!containsOurTile(list) && !Prefs.tileSeeded(c)) {
             list.add(newMenu(c, menuCls, list, true));
-            XposedHelpers.callStaticMethod(hCls, "i", list);
+            changed = true;
         }
         Prefs.setTileSeeded(c, true);
+        // 「捐赠」和「模块设置」一样默认放进快速开始，点击直接打开捐赠页
+        if (!containsRoute(list, ROUTE_DONATE) && !Prefs.donateSeeded(c)) {
+            list.add(newMenu(c, menuCls, list, true, ICON_DONATE, TILE_DONATE, ROUTE_DONATE));
+            changed = true;
+        }
+        Prefs.setDonateSeeded(c, true);
+        if (changed) XposedHelpers.callStaticMethod(hCls, "i", list);
+    }
+
+    private static boolean containsRoute(List list, String route) {
+        for (Object o : list) {
+            try {
+                if (route.equals(XposedHelpers.callMethod(o, "getRoute"))) return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     private static void toggleTile(Activity act, Object adapter, Object item, int pos) {
@@ -282,6 +320,11 @@ public final class SettingsHooks {
     }
 
     private static Object newMenu(Context c, Class<?> menuCls, List sameList, boolean active) {
+        return newMenu(c, menuCls, sameList, active, "ic_setting", TILE_TEXT, ROUTE);
+    }
+
+    private static Object newMenu(Context c, Class<?> menuCls, List sameList, boolean active,
+                                  String icon, String text, String route) {
         String colorId = "";
         for (Object o : sameList) {
             try {
@@ -293,9 +336,9 @@ public final class SettingsHooks {
             } catch (Throwable ignored) {
             }
         }
-        Object menu = XposedHelpers.newInstance(menuCls, "ic_setting", TILE_TEXT, colorId,
+        Object menu = XposedHelpers.newInstance(menuCls, icon, text, colorId,
                 Boolean.valueOf(active));
-        XposedHelpers.callMethod(menu, "setRoute", ROUTE);
+        XposedHelpers.callMethod(menu, "setRoute", route);
         return menu;
     }
 
