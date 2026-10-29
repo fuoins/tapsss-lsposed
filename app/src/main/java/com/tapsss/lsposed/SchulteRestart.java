@@ -86,14 +86,37 @@ public final class SchulteRestart {
             // adv<mode>_<suffix>，界面上完全还是官方那套控件
             try {
                 Class<?> kv = XposedHelpers.findClass(KV_DATA, cl);
-                XC_MethodHook rewrite = new XC_MethodHook() {
+                XposedBridge.hookAllMethods(kv, "getValue", new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         rewriteKey(param);
                     }
-                };
-                XposedBridge.hookAllMethods(kv, "getValue", rewrite);
-                XposedBridge.hookAllMethods(kv, "setValue", rewrite);
+
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        // 兜底：adv key 还没有值（从没进过该高级模式）时返回默认值，
+                        // 否则官方页面把 null 强转 Boolean 会直接崩掉（表现为返回上一页）
+                        if (param.getResult() != null || param.args.length == 0
+                                || !(param.args[0] instanceof String)) return;
+                        String key = (String) param.args[0];
+                        if (!key.startsWith("adv")) return;
+                        Object def = null;
+                        try {
+                            def = XposedHelpers.getObjectField(param.thisObject, "defaultValue");
+                        } catch (Throwable ignored) {
+                        }
+                        if (!(def instanceof Boolean) && !(def instanceof Integer)) {
+                            def = key.endsWith("_") ? Boolean.FALSE : Integer.valueOf(3);
+                        }
+                        param.setResult(def);
+                    }
+                });
+                XposedBridge.hookAllMethods(kv, "setValue", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        rewriteKey(param);
+                    }
+                });
             } catch (Throwable t) {
                 MainHook.log("重开页 KV 改写 Hook 失败: " + t);
             }
@@ -278,9 +301,29 @@ public final class SchulteRestart {
     private static void pickAdv(Activity act, TabUi ui, int adv) {
         ui.adv = adv;
         AdvancedPages.applyChipState(ui.advRow, adv);
+        if (adv > 0) ensureAdvInit(act, adv);
         overrideAdv = adv;
         overrideBase = adv > 0 ? base(act) : null;
         refreshOfficial(act);
+    }
+
+    /** 高级模式的 adv key 首次使用前写一遍默认值，避免官方页面读到 null */
+    private static void ensureAdvInit(Activity act, int adv) {
+        if (adv <= 0 || Prefs.advInitDone(act, adv)) return;
+        try {
+            if (!ensureKv()) return;
+            Object defE = XposedHelpers.getObjectField(errEnable, "defaultValue");
+            Object defC = XposedHelpers.getObjectField(errCount, "defaultValue");
+            Object enable = defE instanceof Boolean ? defE : Boolean.FALSE;
+            Object count = defC instanceof Integer ? defC : Integer.valueOf(3);
+            XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", enable);
+            for (int level = 3; level <= 10; level++) {
+                XposedHelpers.callMethod(errCount, "setValue", "adv" + adv + "_" + level, count);
+            }
+            Prefs.setAdvInitDone(act, adv);
+        } catch (Throwable t) {
+            MainHook.log("高级模式重开初始化失败: " + t);
+        }
     }
 
     private static String base(Activity act) {
@@ -376,7 +419,7 @@ public final class SchulteRestart {
     /** 预设列表：官方顺序模式一条 + 每个高级模式各一条 + 全关 */
     private static void showPresets(final Activity act) {
         try {
-            final String[] items = new String[AdvancedSchulte.SHORT.length + 2];
+            final String[] items = new String[AdvancedSchulte.SHORT.length + 1];
             items[0] = "错一个就重开（所有模式 · 顺序）";
             for (int i = 1; i < AdvancedSchulte.SHORT.length; i++) {
                 items[i] = "错一个就重开（" + AdvancedSchulte.SHORT[i] + "）";
@@ -415,6 +458,7 @@ public final class SchulteRestart {
                 XposedHelpers.callMethod(errCount, "setValue",
                         "adv" + adv + "_" + level, Integer.valueOf(1));
             }
+            Prefs.setAdvInitDone(act, adv);
             if (overrideAdv == adv) refreshOfficial(act);
             Ui.toast(act, "已开启：" + AdvancedSchulte.SHORT[adv] + " 错一个就重开（错误数 1）");
         } catch (Throwable t) {
@@ -459,6 +503,7 @@ public final class SchulteRestart {
 
             int savedAdv = overrideAdv;
             String savedBase = overrideBase;
+            int written;
             overrideAdv = 0;
             overrideBase = null;
             try {
@@ -471,21 +516,22 @@ public final class SchulteRestart {
                         }
                     }
                 }
+                // 写完后读回 8 个组合的开关值，确认真的落到了官方读的地方
+                // （校验必须在 override 清零期间做，否则 key 会被改写成 adv 的）
+                written = countWritten(errEnable, flag);
+                MainHook.log("重开预设写入校验: " + written + "/8 enable=" + enable);
+                if (written < 8) {
+                    // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
+                    // 直接写官方 SP 落点并清空缓存后再校验一次
+                    rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
+                    written = countWritten(errEnable, flag);
+                    MainHook.log("重开预设二次校验: " + written + "/8");
+                }
             } finally {
                 overrideAdv = savedAdv;
                 overrideBase = savedBase;
             }
-
-            // 写完后读回 8 个组合的开关值，确认真的落到了官方读的地方
-            int written = countWritten(errEnable, flag);
-            MainHook.log("重开预设写入校验: " + written + "/8 enable=" + enable);
-            if (written < 8) {
-                // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
-                // 直接写官方 SP 落点并清空缓存后再校验一次
-                rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
-                written = countWritten(errEnable, flag);
-                MainHook.log("重开预设二次校验: " + written + "/8");
-            }
+            if (savedAdv > 0) ensureAdvInit(act, savedAdv);
 
             refreshOfficial(act);
             String head = enable

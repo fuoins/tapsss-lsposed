@@ -141,6 +141,15 @@ public final class Prefs {
         if (p != null) p.edit().putInt(ADV_START1_MS, Math.max(0, ms)).apply();
     }
 
+    /** 高级模式重开配置（adv key）是否已写过默认值 */
+    public static boolean advInitDone(Context c, int mode) {
+        return bool(c, "adv_init_" + mode, false);
+    }
+
+    public static void setAdvInitDone(Context c, int mode) {
+        setBool(c, "adv_init_" + mode, true);
+    }
+
     /** 非新纪录时不展示成绩，直接自动下一把 */
     public static boolean autoNextNoRecord(Context c) {
         return bool(c, AUTO_NEXT_NO_RECORD, true);
