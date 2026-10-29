@@ -316,10 +316,11 @@ public final class SchulteRestart {
             Object defC = XposedHelpers.getObjectField(errCount, "defaultValue");
             Object enable = defE instanceof Boolean ? defE : Boolean.FALSE;
             Object count = defC instanceof Integer ? defC : Integer.valueOf(3);
-            XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", enable);
+            setKv(errEnable, "adv" + adv + "_", enable);
             for (int level = 3; level <= 10; level++) {
-                XposedHelpers.callMethod(errCount, "setValue", "adv" + adv + "_" + level, count);
+                setKv(errCount, "adv" + adv + "_" + level, count);
             }
+            clearSpCache(act.getClassLoader());
             Prefs.setAdvInitDone(act, adv);
         } catch (Throwable t) {
             MainHook.log("高级模式重开初始化失败: " + t);
@@ -474,6 +475,7 @@ public final class SchulteRestart {
             }
             if (savedAdv > 0) ensureAdvInit(act, savedAdv);
             refreshOfficial(act);
+            syncSwitch(act, true);
 
             String head = adv == 0
                     ? "已开启：顺序（官方所有模式 × 所有阶数）错一个就重开"
@@ -489,17 +491,16 @@ public final class SchulteRestart {
         for (int type = 0; type <= 3; type++) {
             for (int blind = 0; blind <= 1; blind++) {
                 String base = type + String.valueOf(blind == 1);
-                XposedHelpers.callMethod(errEnable, "setValue", base, flag);
+                setKv(errEnable, base, flag);
                 for (int level = 3; level <= 10; level++) {
-                    XposedHelpers.callMethod(errCount, "setValue", base + level, value);
+                    setKv(errCount, base + level, value);
                 }
             }
         }
+        clearSpCache(act.getClassLoader());
         int written = countWritten(errEnable, flag);
         MainHook.log("重开预设写入校验: " + written + "/8 enable=" + flag);
         if (written < 8) {
-            // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
-            // 直接写官方 SP 落点并清空缓存后再校验一次
             rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
             written = countWritten(errEnable, flag);
             MainHook.log("重开预设二次校验: " + written + "/8");
@@ -509,11 +510,11 @@ public final class SchulteRestart {
 
     /** 写单个高级模式的所有阶数配置 */
     private static void writeAdv(Activity act, int adv, Boolean flag, Integer value) {
-        XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", flag);
+        setKv(errEnable, "adv" + adv + "_", flag);
         for (int level = 3; level <= 10; level++) {
-            XposedHelpers.callMethod(errCount, "setValue",
-                    "adv" + adv + "_" + level, value);
+            setKv(errCount, "adv" + adv + "_" + level, value);
         }
+        clearSpCache(act.getClassLoader());
         Prefs.setAdvInitDone(act, adv);
     }
 
@@ -571,6 +572,7 @@ public final class SchulteRestart {
             }
             if (savedAdv > 0) ensureAdvInit(act, savedAdv);
             refreshOfficial(act);
+            syncSwitch(act, enable);
 
             String head = enable
                     ? "已把官方所有模式 + 6 个高级模式全部打开「错误自动重开」，错误数 1"
@@ -598,33 +600,64 @@ public final class SchulteRestart {
         return ok;
     }
 
+    /** 直接驱动页面上「错误自动重开」开关，避免只写了数据、界面没勾上 */
+    private static void syncSwitch(Activity act, boolean enable) {
+        try {
+            Object binding = XposedHelpers.getObjectField(act, "view");
+            Object sw = XposedHelpers.getObjectField(binding, "Z");
+            if (sw != null) XposedHelpers.callMethod(sw, "setChecked", Boolean.valueOf(enable));
+        } catch (Throwable t) {
+            MainHook.log("同步重开开关失败: " + t);
+        }
+    }
+
+    /** 写一个 KV：先走 KVData.setValue（官方内存态），再直写 SP，保证官方页面读到的就是新值 */
+    private static void setKv(Object kv, String key, Object value) {
+        try {
+            XposedHelpers.callMethod(kv, "setValue", key, value);
+        } catch (Throwable ignored) {
+        }
+        try {
+            writeSpKey(kv.getClass().getClassLoader(), kv, key, value);
+        } catch (Throwable t) {
+            MainHook.log("直写 KV 失败: " + t);
+        }
+    }
+
+    private static void writeSpKey(ClassLoader cl, Object kv, String key, Object value)
+            throws Throwable {
+        Class<?> sp = XposedHelpers.findClass("com.star.minesweeping.utils.o.g", cl);
+        String real = String.valueOf(XposedHelpers.callMethod(kv, "getRealKey"));
+        Method put = sp.getDeclaredMethod("s", String.class, Object.class);
+        put.setAccessible(true);
+        put.invoke(null, real + key, value);
+    }
+
+    private static void clearSpCache(ClassLoader cl) {
+        try {
+            Class<?> sp = XposedHelpers.findClass("com.star.minesweeping.utils.o.g", cl);
+            Field cache = sp.getDeclaredField("a");
+            cache.setAccessible(true);
+            Object map = cache.get(null);
+            if (map instanceof Map) ((Map<?, ?>) map).clear();
+        } catch (Throwable ignored) {
+        }
+    }
+
     /** 直接写官方 SharedPreferences 的落点（utils.o.g#s），并清空其内存缓存 */
     private static void rewriteViaSp(ClassLoader cl, Object errEnable, Object errCount,
                                      Boolean flag, Integer value) {
         try {
-            String realEnable = String.valueOf(
-                    XposedHelpers.callMethod(errEnable, "getRealKey"));
-            String realCount = String.valueOf(
-                    XposedHelpers.callMethod(errCount, "getRealKey"));
-            Class<?> sp = XposedHelpers.findClass("com.star.minesweeping.utils.o.g", cl);
-            Method put = sp.getDeclaredMethod("s", String.class, Object.class);
-            put.setAccessible(true);
             for (int type = 0; type <= 3; type++) {
                 for (int blind = 0; blind <= 1; blind++) {
                     String base = type + String.valueOf(blind == 1);
-                    put.invoke(null, realEnable + base, flag);
+                    writeSpKey(cl, errEnable, base, flag);
                     for (int level = 3; level <= 10; level++) {
-                        put.invoke(null, realCount + base + level, value);
+                        writeSpKey(cl, errCount, base + level, value);
                     }
                 }
             }
-            try {
-                Field cache = sp.getDeclaredField("a");
-                cache.setAccessible(true);
-                Object map = cache.get(null);
-                if (map instanceof Map) ((Map<?, ?>) map).clear();
-            } catch (Throwable ignored) {
-            }
+            clearSpCache(cl);
         } catch (Throwable t) {
             MainHook.log("重开预设直接写 SP 失败: " + t);
         }
