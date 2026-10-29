@@ -12,6 +12,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.Map;
+
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -166,6 +170,17 @@ public final class SchulteRestart {
                 }
             }
 
+            // 写完后读回 8 个组合的开关值，确认真的落到了官方读的地方
+            int written = countWritten(errEnable, flag);
+            MainHook.log("重开预设写入校验: " + written + "/8 enable=" + enable);
+            if (written < 8) {
+                // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
+                // 直接写官方 SP 落点并清空缓存后再校验一次
+                rewriteViaSp(cl, errEnable, errCount, flag, value);
+                written = countWritten(errEnable, flag);
+                MainHook.log("重开预设二次校验: " + written + "/8");
+            }
+
             // 刷新页面：r0 = 错误设置列表，s0 = 开关/倒计时面板，w(type, blind) = 当前模式
             for (String m : new String[]{"r0", "s0"}) {
                 try {
@@ -187,12 +202,61 @@ public final class SchulteRestart {
                 if (sw != null) XposedHelpers.callMethod(sw, "setChecked", flag);
             } catch (Throwable ignored) {
             }
-            Ui.toast(act, enable
+            String head = enable
                     ? "已把所有模式、所有阶数的错误自动重开打开，错误数设为 1"
-                    : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0");
+                    : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0";
+            Ui.toast(act, written >= 8 ? head : head + "（校验 " + written + "/8，请切换模式确认）");
         } catch (Throwable t) {
             MainHook.log("应用重开预设失败: " + t);
             Ui.toast(act, "应用预设失败: " + t);
+        }
+    }
+
+    /** 读回 8 个模式组合的错误自动重开开关，统计与目标值一致的数量 */
+    private static int countWritten(Object errEnable, Boolean flag) {
+        int ok = 0;
+        for (int type = 0; type <= 3; type++) {
+            for (int blind = 0; blind <= 1; blind++) {
+                try {
+                    Object v = XposedHelpers.callMethod(errEnable, "getValue",
+                            type + String.valueOf(blind == 1));
+                    if (v instanceof Boolean && ((Boolean) v).equals(flag)) ok++;
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return ok;
+    }
+
+    /** 直接写官方 SharedPreferences 的落点（utils.o.g#s），并清空其内存缓存 */
+    private static void rewriteViaSp(ClassLoader cl, Object errEnable, Object errCount,
+                                     Boolean flag, Integer value) {
+        try {
+            String realEnable = String.valueOf(
+                    XposedHelpers.callMethod(errEnable, "getRealKey"));
+            String realCount = String.valueOf(
+                    XposedHelpers.callMethod(errCount, "getRealKey"));
+            Class<?> sp = XposedHelpers.findClass("com.star.minesweeping.utils.o.g", cl);
+            Method put = sp.getDeclaredMethod("s", String.class, Object.class);
+            put.setAccessible(true);
+            for (int type = 0; type <= 3; type++) {
+                for (int blind = 0; blind <= 1; blind++) {
+                    String base = type + String.valueOf(blind == 1);
+                    put.invoke(null, realEnable + base, flag);
+                    for (int level = 3; level <= 10; level++) {
+                        put.invoke(null, realCount + base + level, value);
+                    }
+                }
+            }
+            try {
+                Field cache = sp.getDeclaredField("a");
+                cache.setAccessible(true);
+                Object map = cache.get(null);
+                if (map instanceof Map) ((Map<?, ?>) map).clear();
+            } catch (Throwable ignored) {
+            }
+        } catch (Throwable t) {
+            MainHook.log("重开预设直接写 SP 失败: " + t);
         }
     }
 
