@@ -442,6 +442,22 @@ public final class SchulteHooks {
         int[] parts = officialKeyParts(a);
         if (time <= 0 || parts == null) return;
         String key = "official_best_" + parts[0] + "_" + parts[1] + "_" + parts[2];
+
+        // 成绩弹窗监听器 $c 是 App 懒加载的：首次结算时可能还没装上，
+        // 这里立即补一次，再延迟补一次（此时 $c 必定已加载），保证从下一把起能静默。
+        if (!resultHooked) {
+            final ClassLoader cl2 = a.getClassLoader();
+            ensureOfficialHooks(cl2);
+            if (!resultHooked) {
+                Ui.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        ensureOfficialHooks(cl2);
+                    }
+                }, 1200);
+            }
+        }
+
         // 关键：在这里（官方刚算完成绩、计时器还没被下一局重置时）同步缓存本局归属。
         // $c.z 可能被校时网络请求推迟到下一局开始后才回调，那时现场的计时器/模式已经变了。
         XposedHelpers.setAdditionalInstanceField(a, KEY_LAST_TIME, Long.valueOf(time));
@@ -451,9 +467,9 @@ public final class SchulteHooks {
             Prefs.setLong(a, key, time);
             XposedHelpers.setAdditionalInstanceField(a, KEY_RESULT_ALLOWED, Boolean.TRUE);
             if (best <= 0) {
-                // 该模式/阶数还没有本地最佳：官方必然按新纪录展示。
-                // 提示一下，避免误以为「非新纪录不展示」没生效（下一把起就会静默）。
-                toastThrottled(a, "该模式首次成绩已记为最佳，之后非新纪录会静默");
+                // 该模式/阶数还没有本地最佳基线：这一把只能先按官方流程展示。
+                // 排行数据是服务器异步返回的，结算时拿不到，所以这里如实提示正在获取。
+                toastThrottled(a, "已开启【非新纪录不展示成绩，自动下一把】功能，正在获取顺序下的记录数据");
             }
             MainHook.log("官方模式新纪录(" + time + ")，按官方流程展示");
             return;

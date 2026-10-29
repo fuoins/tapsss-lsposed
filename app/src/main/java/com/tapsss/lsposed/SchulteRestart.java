@@ -97,16 +97,19 @@ public final class SchulteRestart {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
-    /** 预设列表：目前第一条就是「错一个就重开」 */
+    /** 预设列表：错一个就重开 / 错误不重开 */
     private static void showPresets(final Activity act) {
         try {
             new AlertDialog.Builder(act)
                     .setTitle("重开预设")
-                    .setItems(new String[]{"错一个就重开（所有模式 · 所有阶数）"},
+                    .setItems(new String[]{
+                            "错一个就重开（所有模式 · 所有阶数）",
+                            "错误不重开（所有模式 · 所有阶数）"},
                             new DialogInterface.OnClickListener() {
                                 @Override
                                 public void onClick(DialogInterface dialog, int which) {
-                                    confirmErrorOne(act);
+                                    if (which == 0) confirmPreset(act, true, 1);
+                                    else confirmPreset(act, false, 0);
                                 }
                             })
                     .setNegativeButton("取消", null)
@@ -116,17 +119,20 @@ public final class SchulteRestart {
         }
     }
 
-    private static void confirmErrorOne(final Activity act) {
+    private static void confirmPreset(final Activity act, final boolean enable, final int count) {
+        String action = enable
+                ? "会把所有模式（简单 / 简单盲玩 / 普通 / 普通盲玩 / 简单打乱 / 打乱）"
+                + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」都打开，并把错误数设为 1。"
+                : "会把所有模式（简单 / 简单盲玩 / 普通 / 普通盲玩 / 简单打乱 / 打乱）"
+                + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」关闭，并把错误数设为 0。";
         try {
             new AlertDialog.Builder(act)
-                    .setTitle("错一个就重开")
-                    .setMessage("会把所有模式（简单 / 简单盲玩 / 普通 / 普通盲玩 / 简单打乱 / 打乱）"
-                            + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」都打开，"
-                            + "并把错误数设为 1。确定吗？")
+                    .setTitle(enable ? "错一个就重开" : "错误不重开")
+                    .setMessage(action + "\n\n确定吗？")
                     .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
-                            applyErrorOne(act);
+                            applyPreset(act, enable, count);
                         }
                     })
                     .setNegativeButton("取消", null)
@@ -136,34 +142,46 @@ public final class SchulteRestart {
         }
     }
 
-    /** 写入官方配置：type 0-3 × blind 0/1 的开关设为 true，全部阶数的错误数设为 1 */
-    private static void applyErrorOne(Activity act) {
+    /**
+     * 写入官方配置。
+     * 官方开关回调 X(...) 的 key 是「type + 布尔」→ 0true / 0false，
+     * 错误数的 key 是「type + 布尔 + level」→ 0true3；不能拼成 0/1，否则官方读不到。
+     */
+    private static void applyPreset(Activity act, boolean enable, int count) {
         try {
             ClassLoader cl = act.getClassLoader();
             Class<?> kvCls = XposedHelpers.findClass(SCHULTE_SETTING_KV, cl);
             Object errEnable = XposedHelpers.getStaticObjectField(kvCls, "i");
             Object errCount = XposedHelpers.getStaticObjectField(kvCls, "j");
+            Boolean flag = enable ? Boolean.TRUE : Boolean.FALSE;
+            Integer value = Integer.valueOf(count);
 
             for (int type = 0; type <= 3; type++) {
                 for (int blind = 0; blind <= 1; blind++) {
-                    // 与官方 presetKey 一致：type+blind 是开关的 key，type+blind+level 是阈值的 key
-                    String base = "" + type + blind;
-                    XposedHelpers.callMethod(errEnable, "setValue", base, Boolean.TRUE);
+                    String base = type + String.valueOf(blind == 1);
+                    XposedHelpers.callMethod(errEnable, "setValue", base, flag);
                     for (int level = 3; level <= 10; level++) {
-                        XposedHelpers.callMethod(errCount, "setValue",
-                                base + level, Integer.valueOf(1));
+                        XposedHelpers.callMethod(errCount, "setValue", base + level, value);
                     }
                 }
             }
 
-            // 刷新页面上的当前模式显示（官方私有方法 w(int type, boolean blind)）
+            // 刷新页面：r0 = 错误设置列表，s0 = 开关/倒计时面板，w(type, blind) = 当前模式
+            for (String m : new String[]{"r0", "s0"}) {
+                try {
+                    XposedHelpers.callMethod(act, m);
+                } catch (Throwable ignored) {
+                }
+            }
             try {
                 int type = XposedHelpers.getIntField(act, "a");
                 boolean blind = XposedHelpers.getBooleanField(act, "b");
                 XposedHelpers.callMethod(act, "w", type, blind);
             } catch (Throwable ignored) {
             }
-            Ui.toast(act, "已把所有模式、所有阶数的错误自动重开设为 1");
+            Ui.toast(act, enable
+                    ? "已把所有模式、所有阶数的错误自动重开打开，错误数设为 1"
+                    : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0");
         } catch (Throwable t) {
             MainHook.log("应用重开预设失败: " + t);
             Ui.toast(act, "应用预设失败: " + t);
