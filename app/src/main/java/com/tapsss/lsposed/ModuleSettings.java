@@ -59,6 +59,8 @@ public final class ModuleSettings {
         root.addView(feature(c, "右上角阶数弹窗增强"));
         root.addView(feature(c, "倒计时取消下限限制"));
         root.addView(feature(c, "重开预设"));
+        root.addView(hint(c, "一键预设入口：App 设置 → 舒尔特方格 → 重开，页面顶部的「重开预设」按钮"
+                + "（含「错一个就重开」：一次把所有模式、所有阶数的错误重开设为 1）"));
 
         showDialog(act, "舒尔特方格", root, "保存", new Runnable() {
             @Override
