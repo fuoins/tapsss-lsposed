@@ -150,6 +150,15 @@ public final class Prefs {
         setBool(c, "adv_init_" + mode, true);
     }
 
+    /** 是否已清理 1.0.27/1.0.28 误写进「重开时时间」的值 */
+    public static boolean wrongKvCleaned(Context c) {
+        return bool(c, "wrong_kv_cleaned", false);
+    }
+
+    public static void setWrongKvCleaned(Context c) {
+        setBool(c, "wrong_kv_cleaned", true);
+    }
+
     /** 非新纪录时不展示成绩，直接自动下一把 */
     public static boolean autoNextNoRecord(Context c) {
         return bool(c, AUTO_NEXT_NO_RECORD, true);
