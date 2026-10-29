@@ -54,6 +54,8 @@ public final class SchulteRestart {
     private static Class<?> kvCls;
     private static Object errEnable;
     private static Object errCount;
+    /** 「重开时时间」那组 KV，只用来清理 1.0.27/1.0.28 误写进去的值 */
+    private static Object timeEnable;
 
     private SchulteRestart() {
     }
@@ -146,8 +148,11 @@ public final class SchulteRestart {
         if (loader == null) return false;
         try {
             if (kvCls == null) kvCls = XposedHelpers.findClass(SCHULTE_SETTING_KV, loader);
-            errEnable = XposedHelpers.getStaticObjectField(kvCls, "g");
+            // 官方布局：error_restart_item 对应 binding Z（KVData i），
+            // time_restart_item 对应 binding i0（KVData g）—— 别写反
+            errEnable = XposedHelpers.getStaticObjectField(kvCls, "i");
             errCount = XposedHelpers.getStaticObjectField(kvCls, "j");
+            timeEnable = XposedHelpers.getStaticObjectField(kvCls, "g");
             return errEnable != null && errCount != null;
         } catch (Throwable t) {
             return false;
@@ -184,6 +189,8 @@ public final class SchulteRestart {
         if (!Ui.isAlive(act)) return;
         ViewGroup content = scrollContent(act);
         if (content == null) return;
+
+        cleanupWrongKv(act);
 
         // 右上角的官方模式选择（点击弹 popup 的 TextView）隐藏，改用下面两排标签
         try {
@@ -598,6 +605,38 @@ public final class SchulteRestart {
             }
         }
         return ok;
+    }
+
+    /**
+     * 1.0.27 / 1.0.28 把官方那组 key 误写到了「重开时时间」的 KV（i.f.j;->g），
+     * 这里一次性删掉，让时间重开回到 App 默认。
+     */
+    private static void cleanupWrongKv(Activity act) {
+        if (Prefs.wrongKvCleaned(act)) return;
+        try {
+            if (!ensureKv() || timeEnable == null) return;
+            for (int type = 0; type <= 3; type++) {
+                for (int blind = 0; blind <= 1; blind++) {
+                    String base = type + String.valueOf(blind == 1);
+                    XposedHelpers.callMethod(timeEnable, "setValue", base, null);
+                }
+            }
+            for (int adv = 1; adv <= 5; adv++) {
+                String key = "adv" + adv + "_";
+                // 旧版把高级模式的重开开关也写到了时间 KV 上，先搬回错误 KV 再删
+                try {
+                    Object v = XposedHelpers.callMethod(timeEnable, "getValue", key);
+                    if (v instanceof Boolean) setKv(errEnable, key, v);
+                } catch (Throwable ignored) {
+                }
+                XposedHelpers.callMethod(timeEnable, "setValue", key, null);
+            }
+            clearSpCache(act.getClassLoader());
+            Prefs.setWrongKvCleaned(act);
+            MainHook.log("已清理误写的重开时间配置");
+        } catch (Throwable t) {
+            MainHook.log("清理误写配置失败: " + t);
+        }
     }
 
     /** 直接驱动页面上「错误自动重开」开关，避免只写了数据、界面没勾上 */
