@@ -450,7 +450,7 @@ public final class AdvancedPages {
 
     // ------------------------------------------------------------------ 标签行
 
-    private interface Pick {
+    interface Pick {
         void onPick(int index);
     }
 
@@ -460,7 +460,7 @@ public final class AdvancedPages {
         int accent;
     }
 
-    private static View chipRow(Context c, String[] labels, int selected, Pick pick) {
+    static View chipRow(Context c, String[] labels, int selected, Pick pick) {
         // 与总成绩那排 SlidingTabLayout 一致：选中 @color/dark 加粗 + 15dp 下划线，
         // 未选中 @color/normal（之前用 theme 在部分主题下是白色，看着像没选中）
         final int accent = color(c, "dark", 0xFF333333);
@@ -514,7 +514,7 @@ public final class AdvancedPages {
         return scroll;
     }
 
-    private static void applyChipState(ViewGroup row, int selected) {
+    static void applyChipState(ViewGroup row, int selected) {
         for (int i = 0; i < row.getChildCount(); i++) {
             Object tag = row.getChildAt(i).getTag();
             if (!(tag instanceof Chip)) continue;

@@ -141,6 +141,25 @@ public final class Prefs {
         if (p != null) p.edit().putInt(ADV_START1_MS, Math.max(0, ms)).apply();
     }
 
+    /** 高级模式点错重开：按模式（1..5）各存一份开关与错误数阈值 */
+    public static boolean advErrRestart(Context c, int mode) {
+        return bool(c, "adv_err_restart_" + mode, false);
+    }
+
+    public static void setAdvErrRestart(Context c, int mode, boolean v) {
+        setBool(c, "adv_err_restart_" + mode, v);
+    }
+
+    public static int advErrCount(Context c, int mode) {
+        SharedPreferences p = get(c);
+        return p == null ? 1 : p.getInt("adv_err_count_" + mode, 1);
+    }
+
+    public static void setAdvErrCount(Context c, int mode, int n) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt("adv_err_count_" + mode, Math.max(1, n)).apply();
+    }
+
     /** 非新纪录时不展示成绩，直接自动下一把 */
     public static boolean autoNextNoRecord(Context c) {
         return bool(c, AUTO_NEXT_NO_RECORD, true);
