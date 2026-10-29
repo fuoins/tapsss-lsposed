@@ -179,6 +179,14 @@ public final class SchulteRestart {
                 XposedHelpers.callMethod(act, "w", type, blind);
             } catch (Throwable ignored) {
             }
+            // 页面开关是自定义 SwitchItem，w() 里刷新的是 KV 读取结果；
+            // 这里直接把「错误自动重开」开关（binding 的 Z）也同步过来，确保视觉上就是开的
+            try {
+                Object binding = XposedHelpers.getObjectField(act, "view");
+                Object sw = XposedHelpers.getObjectField(binding, "Z");
+                if (sw != null) XposedHelpers.callMethod(sw, "setChecked", flag);
+            } catch (Throwable ignored) {
+            }
             Ui.toast(act, enable
                     ? "已把所有模式、所有阶数的错误自动重开打开，错误数设为 1"
                     : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0");

@@ -1,6 +1,7 @@
 package com.tapsss.lsposed;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.Context;
 import android.os.SystemClock;
 import android.view.MotionEvent;
@@ -217,6 +218,7 @@ public final class SchulteHooks {
      * 首次安装可能还没被加载，之后 onResume 会通过 ensureOfficialHooks 补装。
      */
     static void installOfficialHooks(ClassLoader cl) {
+        installDialogGuard();
         if (officialHooked) return;
         Class<?> listenerCls = XposedHelpers.findClassIfExists(ACTIVITY + "$b", cl);
         if (!cbHooked) {
@@ -275,6 +277,59 @@ public final class SchulteHooks {
         }
     }
 
+    /** 成绩弹窗类（3.6.10 混淆名）：$c.z 没装上时用它兜底 */
+    private static final String RESULT_DIALOG = "com.star.minesweeping.k.b.n4.o";
+    private static volatile boolean dialogHooked;
+
+    /**
+     * 兜底拦截：成绩弹窗监听器 $c 由 App 懒加载，首次结算时模块可能还没挂上 z()，
+     * 同一 Activity 内之后每一把非新纪录就仍会弹成绩（切一次模式重建后才会好）。
+     * 这里直接拦成绩 Dialog 的 show：只要本局被 $b.d 判定为非新纪录，就挡掉并自动下一把。
+     */
+    private static void installDialogGuard() {
+        if (dialogHooked) return;
+        try {
+            XposedBridge.hookAllMethods(Dialog.class, "show", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        guardResultDialog(param);
+                    } catch (Throwable t) {
+                        MainHook.log("成绩弹窗兜底拦截失败: " + t);
+                    }
+                }
+            });
+            dialogHooked = true;
+            MainHook.log("成绩弹窗兜底拦截已安装");
+        } catch (Throwable t) {
+            MainHook.log("成绩弹窗兜底 Hook 失败: " + t);
+        }
+    }
+
+    private static void guardResultDialog(XC_MethodHook.MethodHookParam param) {
+        Object dialog = param.thisObject;
+        if (!(dialog instanceof Dialog)) return;
+        if (!dialog.getClass().getName().startsWith(RESULT_DIALOG)) return;
+        Activity a = Ui.findActivity(((Dialog) dialog).getContext());
+        if (a == null) return;
+        if (!Prefs.moduleEnabled(a) || !Prefs.autoNextNoRecord(a)) return;
+        if (AdvancedSchulte.advCompleting) return;
+        if (XposedHelpers.getAdditionalInstanceField(a, KEY_SILENT) == null) return;
+
+        XposedHelpers.removeAdditionalInstanceField(a, KEY_SILENT);
+        param.setResult(null);
+        MainHook.log("官方模式非新纪录，成绩弹窗由 Dialog 兜底拦截");
+        if (XposedHelpers.getAdditionalInstanceField(a, KEY_RESTART_PENDING) != null) return;
+        XposedHelpers.setAdditionalInstanceField(a, KEY_RESTART_PENDING, Boolean.TRUE);
+        final Activity target = a;
+        Ui.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                nextOfficialRound(target);
+            }
+        }, 150);
+    }
+
     static final String KEY_BYPASS_BUSY = "tapsss_bypass_busy";
     /** 去过「舒尔特设置」：返回游戏页时整页重建，主题/倒计时/重开预设全部按新值初始化 */
     static final String KEY_FROM_SETTINGS = "tapsss_from_settings";
@@ -285,6 +340,8 @@ public final class SchulteHooks {
     private static final String KEY_LAST_KEY = "tapsss_last_result_key";
     /** 本局已安排过「静默自动下一把」，避免同局的第二次 z() 重复重开 */
     private static final String KEY_RESTART_PENDING = "tapsss_skip_restart_pending";
+    /** 本局已判定为非新纪录：成绩弹窗（Dialog）兜底拦截用 */
+    private static final String KEY_SILENT = "tapsss_silent_result";
     /** onResume 是否真的挂上了：显示在模式弹窗里，方便确认「设置返回生效」有没有装 */
     static volatile boolean resumeHooked;
     /** 官方结算拦截（$b.d / $c.z）是否都已挂上：模式弹窗里显示，便于确认补装结果 */
@@ -435,6 +492,7 @@ public final class SchulteHooks {
         // 每次完成都清掉上一局的标记
         XposedHelpers.removeAdditionalInstanceField(a, KEY_RESULT_ALLOWED);
         XposedHelpers.removeAdditionalInstanceField(a, KEY_RESTART_PENDING);
+        XposedHelpers.removeAdditionalInstanceField(a, KEY_SILENT);
         if (!Prefs.moduleEnabled(a) || !Prefs.autoNextNoRecord(a)) return;
         if (AdvancedSchulte.advCompleting) return;
 
@@ -475,6 +533,9 @@ public final class SchulteHooks {
             return;
         }
         MainHook.log("官方模式非新纪录(" + time + ">=" + best + ")，成绩弹窗将静默");
+        // $c.z 的 Hook 可能因 App 懒加载没装上（切一次模式重建后才会好）；
+        // 这里再打一个标记，由 Dialog.show 兜底，保证同一 Activity 内从这一把起就静默。
+        XposedHelpers.setAdditionalInstanceField(a, KEY_SILENT, Boolean.TRUE);
     }
 
     /**
