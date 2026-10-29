@@ -416,27 +416,19 @@ public final class SchulteRestart {
 
     // ------------------------------------------------------------------ 预设
 
-    /** 预设列表：官方顺序模式一条 + 每个高级模式各一条 + 全关 */
+    /** 预设列表：全开 / 全开（含高级）/ 全关 */
     private static void showPresets(final Activity act) {
         try {
-            final String[] items = new String[AdvancedSchulte.SHORT.length + 1];
-            items[0] = "错一个就重开（所有模式 · 顺序）";
-            for (int i = 1; i < AdvancedSchulte.SHORT.length; i++) {
-                items[i] = "错一个就重开（" + AdvancedSchulte.SHORT[i] + "）";
-            }
-            items[items.length - 1] = "错误不重开（所有模式 · 顺序）";
+            final String[] items = {
+                    "错一个就重开（所有模式 × 6 个高级模式）",
+                    "错一个就重开（所有模式 · 所有高级模式）",
+                    "错误不重开（所有模式 · 所有高级模式）"};
             new AlertDialog.Builder(act)
                     .setTitle("重开预设")
                     .setItems(items, new DialogInterface.OnClickListener() {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
-                            if (which == 0) {
-                                confirmPreset(act, true, 1);
-                            } else if (which == items.length - 1) {
-                                confirmPreset(act, false, 0);
-                            } else {
-                                applyAdvPreset(act, which);
-                            }
+                            confirmPreset(act, which != 2, which == 2 ? 0 : 1);
                         }
                     })
                     .setNegativeButton("取消", null)
@@ -446,33 +438,14 @@ public final class SchulteRestart {
         }
     }
 
-    /** 单个高级模式：打开错误自动重开，所有阶数错误数设为 1（写 adv<mode>_ key） */
-    private static void applyAdvPreset(Activity act, int adv) {
-        try {
-            if (!ensureKv()) {
-                Ui.toast(act, "高级模式预设失败：KV 未就绪");
-                return;
-            }
-            XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", Boolean.TRUE);
-            for (int level = 3; level <= 10; level++) {
-                XposedHelpers.callMethod(errCount, "setValue",
-                        "adv" + adv + "_" + level, Integer.valueOf(1));
-            }
-            Prefs.setAdvInitDone(act, adv);
-            if (overrideAdv == adv) refreshOfficial(act);
-            Ui.toast(act, "已开启：" + AdvancedSchulte.SHORT[adv] + " 错一个就重开（错误数 1）");
-        } catch (Throwable t) {
-            MainHook.log("高级模式预设失败: " + t);
-        }
-    }
-
     private static void confirmPreset(final Activity act, final boolean enable, final int count) {
         String action = enable
-                ? "会把所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
-                + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」都打开，并把错误数设为 1。"
-                + "\n\n只影响「顺序」模式（不叠加高级模式时）；高级模式请在第二排标签里各自设置。"
-                : "会把所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
-                + "和所有阶数（3×3 ~ 10×10）的「错误自动重开」关闭，并把错误数设为 0。";
+                ? "会把官方所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
+                + "和 6 个高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start）"
+                + "的全部阶数（3×3 ~ 10×10）的「错误自动重开」都打开，并把错误数设为 1。"
+                : "会把官方所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
+                + "和 6 个高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start）"
+                + "的全部阶数（3×3 ~ 10×10）的「错误自动重开」关闭，并把错误数设为 0。";
         try {
             new AlertDialog.Builder(act)
                     .setTitle(enable ? "错一个就重开" : "错误不重开")
@@ -480,7 +453,7 @@ public final class SchulteRestart {
                     .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
-                            applyPreset(act, enable, count);
+                            applyAllPreset(act, enable, count);
                         }
                     })
                     .setNegativeButton("取消", null)
@@ -491,11 +464,12 @@ public final class SchulteRestart {
     }
 
     /**
-     * 写入官方配置。
+     * 一次写入官方配置 + 6 个高级模式的配置。
      * 官方开关回调 X(...) 的 key 是「type + 布尔」→ 0true / 0false，
      * 错误数的 key 是「type + 布尔 + level」→ 0true3；不能拼成 0/1，否则官方读不到。
+     * 高级模式存在 adv<模式>_<level>，顺序模式即官方配置。
      */
-    private static void applyPreset(Activity act, boolean enable, int count) {
+    private static void applyAllPreset(Activity act, boolean enable, int count) {
         try {
             if (!ensureKv()) return;
             Boolean flag = enable ? Boolean.TRUE : Boolean.FALSE;
@@ -527,17 +501,26 @@ public final class SchulteRestart {
                     written = countWritten(errEnable, flag);
                     MainHook.log("重开预设二次校验: " + written + "/8");
                 }
+                // 6 个高级模式（0 = 顺序，即上面的官方配置；1..5 为叠加模式）
+                for (int adv = 1; adv <= 5 && adv < AdvancedSchulte.SHORT.length; adv++) {
+                    XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", flag);
+                    for (int level = 3; level <= 10; level++) {
+                        XposedHelpers.callMethod(errCount, "setValue",
+                                "adv" + adv + "_" + level, value);
+                    }
+                    Prefs.setAdvInitDone(act, adv);
+                }
             } finally {
                 overrideAdv = savedAdv;
                 overrideBase = savedBase;
             }
             if (savedAdv > 0) ensureAdvInit(act, savedAdv);
-
             refreshOfficial(act);
+
             String head = enable
-                    ? "已把所有模式、所有阶数的错误自动重开打开，错误数设为 1"
-                    : "已把所有模式、所有阶数的错误自动重开关闭，错误数设为 0";
-            Ui.toast(act, written >= 8 ? head : head + "（校验 " + written + "/8，请切换模式确认）");
+                    ? "已把官方所有模式 + 6 个高级模式全部打开「错误自动重开」，错误数 1"
+                    : "已把官方所有模式 + 6 个高级模式全部关闭「错误自动重开」，错误数 0";
+            Ui.toast(act, written >= 8 ? head : head + "（官方校验 " + written + "/8）");
         } catch (Throwable t) {
             MainHook.log("应用重开预设失败: " + t);
             Ui.toast(act, "应用预设失败: " + t);
