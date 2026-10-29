@@ -2,5 +2,7 @@
 <resources>
     <string-array name="xposed_scope">
         <item>com.star.minesweeping</item>
+        <!-- 共存版（只改包名、类名不变），一起推荐 -->
+        <item>com.star.minesweepinh</item>
     </string-array>
 </resources>
