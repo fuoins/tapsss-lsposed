@@ -146,7 +146,7 @@ public final class SchulteRestart {
         if (loader == null) return false;
         try {
             if (kvCls == null) kvCls = XposedHelpers.findClass(SCHULTE_SETTING_KV, loader);
-            errEnable = XposedHelpers.getStaticObjectField(kvCls, "i");
+            errEnable = XposedHelpers.getStaticObjectField(kvCls, "g");
             errCount = XposedHelpers.getStaticObjectField(kvCls, "j");
             return errEnable != null && errCount != null;
         } catch (Throwable t) {
@@ -416,19 +416,28 @@ public final class SchulteRestart {
 
     // ------------------------------------------------------------------ 预设
 
-    /** 预设列表：全开 / 全开（含高级）/ 全关 */
+    /** 预设列表：6 个高级模式各一条 + 全开 / 全关 */
     private static void showPresets(final Activity act) {
         try {
-            final String[] items = {
-                    "错一个就重开（所有模式 × 6 个高级模式）",
-                    "错一个就重开（所有模式 · 所有高级模式）",
-                    "错误不重开（所有模式 · 所有高级模式）"};
+            final int advCount = AdvancedSchulte.SHORT.length;
+            final String[] items = new String[advCount + 2];
+            for (int i = 0; i < advCount; i++) {
+                items[i] = "错一个就重开（" + AdvancedSchulte.SHORT[i] + "）";
+            }
+            items[items.length - 2] = "错一个就重开（所有模式 · 所有高级模式）";
+            items[items.length - 1] = "错误不重开（所有模式 · 所有高级模式）";
             new AlertDialog.Builder(act)
                     .setTitle("重开预设")
                     .setItems(items, new DialogInterface.OnClickListener() {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
-                            confirmPreset(act, which != 2, which == 2 ? 0 : 1);
+                            if (which < advCount) {
+                                applyOnePreset(act, which);
+                            } else if (which == items.length - 2) {
+                                confirmPreset(act, true, 1);
+                            } else {
+                                confirmPreset(act, false, 0);
+                            }
                         }
                     })
                     .setNegativeButton("取消", null)
@@ -436,6 +445,76 @@ public final class SchulteRestart {
         } catch (Throwable t) {
             MainHook.log("重开预设弹窗失败: " + t);
         }
+    }
+
+    /**
+     * 单个预设：
+     * 0 = 顺序（官方 6 个模式 × 3~10 阶）；1..5 = 对应高级模式（所有阶数）。
+     */
+    private static void applyOnePreset(Activity act, int adv) {
+        try {
+            if (!ensureKv()) return;
+            Boolean flag = Boolean.TRUE;
+            Integer value = Integer.valueOf(1);
+
+            int savedAdv = overrideAdv;
+            String savedBase = overrideBase;
+            overrideAdv = 0;
+            overrideBase = null;
+            int written = 8;
+            try {
+                if (adv == 0) {
+                    written = applyOfficial(act, flag, value);
+                } else {
+                    writeAdv(act, adv, flag, value);
+                }
+            } finally {
+                overrideAdv = savedAdv;
+                overrideBase = savedBase;
+            }
+            if (savedAdv > 0) ensureAdvInit(act, savedAdv);
+            refreshOfficial(act);
+
+            String head = adv == 0
+                    ? "已开启：顺序（官方所有模式 × 所有阶数）错一个就重开"
+                    : "已开启：" + AdvancedSchulte.SHORT[adv] + " 错一个就重开（所有阶数）";
+            Ui.toast(act, written >= 8 ? head : head + "（官方校验 " + written + "/8）");
+        } catch (Throwable t) {
+            MainHook.log("重开预设失败: " + t);
+        }
+    }
+
+    /** 写官方 6 个模式（8 个 type×blind 组合）× 3~10 阶的错误自动重开开关与错误数 */
+    private static int applyOfficial(Activity act, Boolean flag, Integer value) {
+        for (int type = 0; type <= 3; type++) {
+            for (int blind = 0; blind <= 1; blind++) {
+                String base = type + String.valueOf(blind == 1);
+                XposedHelpers.callMethod(errEnable, "setValue", base, flag);
+                for (int level = 3; level <= 10; level++) {
+                    XposedHelpers.callMethod(errCount, "setValue", base + level, value);
+                }
+            }
+        }
+        int written = countWritten(errEnable, flag);
+        MainHook.log("重开预设写入校验: " + written + "/8 enable=" + flag);
+        if (written < 8) {
+            // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
+            // 直接写官方 SP 落点并清空缓存后再校验一次
+            rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
+            written = countWritten(errEnable, flag);
+            MainHook.log("重开预设二次校验: " + written + "/8");
+        }
+        return written;
+    }
+
+    /** 写单个高级模式的所有阶数配置 */
+    private static void writeAdv(Activity act, int adv, Boolean flag, Integer value) {
+        XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", flag);
+        for (int level = 3; level <= 10; level++) {
+            XposedHelpers.callMethod(errCount, "setValue",
+                    "adv" + adv + "_" + level, value);
+        }
+        Prefs.setAdvInitDone(act, adv);
     }
 
     private static void confirmPreset(final Activity act, final boolean enable, final int count) {
@@ -481,34 +560,10 @@ public final class SchulteRestart {
             overrideAdv = 0;
             overrideBase = null;
             try {
-                for (int type = 0; type <= 3; type++) {
-                    for (int blind = 0; blind <= 1; blind++) {
-                        String base = type + String.valueOf(blind == 1);
-                        XposedHelpers.callMethod(errEnable, "setValue", base, flag);
-                        for (int level = 3; level <= 10; level++) {
-                            XposedHelpers.callMethod(errCount, "setValue", base + level, value);
-                        }
-                    }
-                }
-                // 写完后读回 8 个组合的开关值，确认真的落到了官方读的地方
-                // （校验必须在 override 清零期间做，否则 key 会被改写成 adv 的）
-                written = countWritten(errEnable, flag);
-                MainHook.log("重开预设写入校验: " + written + "/8 enable=" + enable);
-                if (written < 8) {
-                    // 少数情况下 App 的 SharedPreferences 内存缓存与写入不同步：
-                    // 直接写官方 SP 落点并清空缓存后再校验一次
-                    rewriteViaSp(act.getClassLoader(), errEnable, errCount, flag, value);
-                    written = countWritten(errEnable, flag);
-                    MainHook.log("重开预设二次校验: " + written + "/8");
-                }
+                written = applyOfficial(act, flag, value);
                 // 6 个高级模式（0 = 顺序，即上面的官方配置；1..5 为叠加模式）
                 for (int adv = 1; adv <= 5 && adv < AdvancedSchulte.SHORT.length; adv++) {
-                    XposedHelpers.callMethod(errEnable, "setValue", "adv" + adv + "_", flag);
-                    for (int level = 3; level <= 10; level++) {
-                        XposedHelpers.callMethod(errCount, "setValue",
-                                "adv" + adv + "_" + level, value);
-                    }
-                    Prefs.setAdvInitDone(act, adv);
+                    writeAdv(act, adv, flag, value);
                 }
             } finally {
                 overrideAdv = savedAdv;
