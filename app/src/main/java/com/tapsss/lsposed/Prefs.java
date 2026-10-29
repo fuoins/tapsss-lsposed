@@ -72,6 +72,9 @@ public final class Prefs {
         return str(c, SAVED_PWD);
     }
 
+    /** 是否已经把「捐赠」默认加进快速开始（加过一次就不再强塞） */
+    public static final String DONATE_SEEDED = "module_donate_seeded";
+
     /** 是否已经把「模块设置」默认加进快速开始（加过一次就不再强塞） */
     public static boolean tileSeeded(Context c) {
         return bool(c, TILE_SEEDED, false);
@@ -79,6 +82,14 @@ public final class Prefs {
 
     public static void setTileSeeded(Context c, boolean v) {
         setBool(c, TILE_SEEDED, v);
+    }
+
+    public static boolean donateSeeded(Context c) {
+        return bool(c, DONATE_SEEDED, false);
+    }
+
+    public static void setDonateSeeded(Context c, boolean v) {
+        setBool(c, DONATE_SEEDED, v);
     }
 
     public static void setBool(Context c, String key, boolean value) {
