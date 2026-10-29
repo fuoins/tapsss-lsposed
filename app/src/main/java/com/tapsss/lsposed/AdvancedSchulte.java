@@ -647,8 +647,8 @@ public final class AdvancedSchulte {
             updateInfo(c, r);
             // 默认点错不重开，只提示应该点哪个数；重开页里给这个高级模式开了
             // 「错误自动重开」的，按设好的错误数阈值重开（顺序模式仍由官方配置控制）
-            int errLimit = Math.max(1, Prefs.advErrCount(c, r.mode));
-            if (Prefs.advErrRestart(c, r.mode) && r.errors >= errLimit) {
+            int errLimit = SchulteRestart.advErrLimit(r.mode, r.n);
+            if (SchulteRestart.advErrEnabled(r.mode) && r.errors >= errLimit) {
                 fail(view, r, "错误 " + r.errors + " 次，重开", 850);
                 return;
             }
