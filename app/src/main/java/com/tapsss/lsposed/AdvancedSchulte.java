@@ -59,7 +59,8 @@ public final class AdvancedSchulte {
             "定义：除反应外，全程最大的两数间隔时间 ≤ N 秒。\n\n"
                     + "N 参考值：3 阶 0.1 / 4 阶 0.2 / 5 阶 0.25 / 6 阶 0.4 / 7 阶 0.75 / "
                     + "8 阶 1.0 / 9 阶 1.75 / 10 阶 3.0。\n\n长期练习可以减少卡顿。",
-            "仅低阶（3-5 阶）。强制减少开局点 1 的反应时间（应 ≤ 0.45 秒），超过则重开。"};
+            "仅低阶（3-5 阶）。强制减少开局点 1 的反应时间（默认应 ≤ 0.45 秒，"
+                    + "可在弹窗里自定义毫秒），超过则重开。"};
 
     private static final String VIEW = "com.star.minesweeping.module.game.schulte.core.SchulteView";
     private static final String ACTIVITY =
@@ -101,7 +102,7 @@ public final class AdvancedSchulte {
 
     private static final float[] MAX_GAP = {
             0f, 0f, 0f, 0.1f, 0.2f, 0.25f, 0.4f, 0.75f, 1.0f, 1.75f, 3.0f};
-    private static final long START1_LIMIT_MS = 450L;
+    private static final long START1_LIMIT_MS = 450L;   // 1start 的内置默认反应上限
 
     private static final int ACCENT_SPEED = 0xFFFF7A45;
     private static final int ACCENT_REVERSE = 0xFF4C8DFF;
@@ -149,6 +150,7 @@ public final class AdvancedSchulte {
             }
             installChartHooks(cl);
             AdvancedPages.install(cl);
+            SchulteRestart.install(cl);
             SchulteHooks.ensureOfficialHooks(cl);
             MainHook.log("高级模式补装检查: e=" + eHooked + " j=" + jHooked + " i=" + iHooked
                     + " restart=" + restartBlocked);
@@ -678,9 +680,9 @@ public final class AdvancedSchulte {
                 return;
             }
         }
-        if (r.mode == START1 && found == 1 && r.reaction > START1_LIMIT_MS) {
+        if (r.mode == START1 && found == 1 && r.reaction > start1LimitMs(c)) {
             fail(view, r, String.format(Locale.US,
-                    "反应 %.2fs > 0.45s，重开", r.reaction / 1000.0), 850);
+                    "反应 %.2fs > %s，重开", r.reaction / 1000.0, start1LimitText(c)), 850);
             return;
         }
 
@@ -1196,6 +1198,22 @@ public final class AdvancedSchulte {
             return Math.min(xPref, total);
         }
         return total;
+    }
+
+    /** 1start 开局点 1 的反应上限（ms）：优先用模块设置里的自定义值，未设置时用内置 450ms */
+    private static long start1LimitMs(Context c) {
+        int ms = Prefs.advStart1Ms(c);
+        return ms > 0 ? ms : START1_LIMIT_MS;
+    }
+
+    /** 1start 的内置反应上限（ms）：弹窗里给「留空 = 内置 …」的提示用 */
+    static long builtinStart1Ms() {
+        return START1_LIMIT_MS;
+    }
+
+    private static String start1LimitText(Context c) {
+        return String.format(Locale.US, "%.2fs%s",
+                start1LimitMs(c) / 1000.0, Prefs.advStart1Ms(c) > 0 ? "（自定义）" : "");
     }
 
     /** max≤N 的内置间隔参考值（ms）：弹窗里给「留空 = 内置 …」的提示用 */

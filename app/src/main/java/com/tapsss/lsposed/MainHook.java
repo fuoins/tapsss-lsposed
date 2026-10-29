@@ -13,7 +13,7 @@ public class MainHook implements IXposedHookLoadPackage {
     public static final String TAG = "TapsssModule";
     public static final String TARGET_PKG = "com.star.minesweeping";
     /** 与 build.gradle 的 versionName 保持一致，显示在模式弹窗里 */
-    public static final String VERSION = "1.0.16";
+    public static final String VERSION = "1.0.17";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -35,6 +35,11 @@ public class MainHook implements IXposedHookLoadPackage {
             AdvancedPages.install(lpparam.classLoader);
         } catch (Throwable t) {
             log("AdvancedPages 安装失败: " + t);
+        }
+        try {
+            SchulteRestart.install(lpparam.classLoader);
+        } catch (Throwable t) {
+            log("SchulteRestart 安装失败: " + t);
         }
         try {
             LoginHooks.install(lpparam.classLoader);

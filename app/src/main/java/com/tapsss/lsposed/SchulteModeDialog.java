@@ -247,6 +247,47 @@ public final class SchulteModeDialog {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             column.addView(gapWrap);
 
+            // 1start 的开局反应上限（ms，仅 1start 显示；留空用内置 450ms）
+            final LinearLayout startRow = new LinearLayout(act);
+            startRow.setOrientation(LinearLayout.HORIZONTAL);
+            startRow.setGravity(Gravity.CENTER_VERTICAL);
+            startRow.setPadding(Ui.dp(act, 3), Ui.dp(act, 4), Ui.dp(act, 3), 0);
+            TextView startLabel = new TextView(act);
+            startLabel.setText("反应 ≤");
+            startLabel.setTextSize(12);
+            startLabel.setAlpha(0.85f);
+            startRow.addView(startLabel, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            final EditText startInput = new EditText(act);
+            startInput.setSingleLine(true);
+            startInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+            startInput.setTextSize(14);
+            startInput.setTextColor(textColor);
+            startInput.setHintTextColor(tint | 0x66000000);
+            startInput.setPadding(Ui.dp(act, 8), 0, Ui.dp(act, 8), 0);
+            GradientDrawable startBg = new GradientDrawable();
+            startBg.setColor(tint | 0x1F000000);
+            startBg.setCornerRadius(Ui.dp(act, 4));
+            startInput.setBackground(startBg);
+            int savedStart1 = Prefs.advStart1Ms(act);
+            if (savedStart1 > 0) startInput.setText(String.valueOf(savedStart1));
+            LinearLayout.LayoutParams startInputLp = new LinearLayout.LayoutParams(
+                    0, Ui.dp(act, 36), 1f);
+            startInputLp.leftMargin = Ui.dp(act, 8);
+            startRow.addView(startInput, startInputLp);
+            TextView startUnit = new TextView(act);
+            startUnit.setText("ms");
+            startUnit.setTextSize(12);
+            startUnit.setAlpha(0.7f);
+            startUnit.setPadding(Ui.dp(act, 6), 0, 0, 0);
+            startRow.addView(startUnit, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            final LinearLayout startWrap = new LinearLayout(act);
+            startWrap.setOrientation(LinearLayout.VERTICAL);
+            startWrap.addView(startRow, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            column.addView(startWrap);
+
             final Runnable refreshAdv = new Runnable() {
                 @Override
                 public void run() {
@@ -256,6 +297,8 @@ public final class SchulteModeDialog {
                     xWrap.setVisibility(adv[0] == AdvancedSchulte.SPEED
                             ? View.VISIBLE : View.GONE);
                     gapWrap.setVisibility(adv[0] == AdvancedSchulte.MAXN
+                            ? View.VISIBLE : View.GONE);
+                    startWrap.setVisibility(adv[0] == AdvancedSchulte.START1
                             ? View.VISIBLE : View.GONE);
                     int total = applied[2] * applied[2];
                     // 换阶数后目标 x 的上限跟着变：超了压回新上限并同步到输入框
@@ -267,6 +310,7 @@ public final class SchulteModeDialog {
                     xInput.setHint("留空 = 全部 " + total);
                     gapInput.setHint("留空 = 内置 "
                             + AdvancedSchulte.fmt(AdvancedSchulte.builtinMaxGapMs(applied[2])));
+                    startInput.setHint("留空 = 内置 " + AdvancedSchulte.builtinStart1Ms());
                 }
             };
             refreshAdv.run();
@@ -312,6 +356,27 @@ public final class SchulteModeDialog {
                         return;
                     }
                     Prefs.setAdvMaxGapMs(act, Math.min(Math.max(v, 0), 60000));
+                }
+            });
+
+            startInput.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+                }
+
+                @Override
+                public void onTextChanged(CharSequence s, int a, int b, int c) {
+                }
+
+                @Override
+                public void afterTextChanged(Editable s) {
+                    int v;
+                    try {
+                        v = s.length() == 0 ? 0 : Integer.parseInt(s.toString());
+                    } catch (Throwable t) {
+                        return;
+                    }
+                    Prefs.setAdvStart1Ms(act, Math.min(Math.max(v, 0), 60000));
                 }
             });
 

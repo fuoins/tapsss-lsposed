@@ -21,6 +21,8 @@ public final class Prefs {
     public static final String ADV_X = "schulte_adv_x";
     /** max≤N：自定义两数最大间隔（毫秒），0 = 用内置参考值 */
     public static final String ADV_MAX_GAP_MS = "schulte_adv_max_gap_ms";
+    /** 1start：自定义开局点 1 的反应上限（毫秒），0 = 用内置 450ms */
+    public static final String ADV_START1_MS = "schulte_adv_start1_ms";
     public static final String AUTO_NEXT_NO_RECORD = "schulte_auto_next_no_record";
 
     private static volatile SharedPreferences sp;
@@ -115,6 +117,17 @@ public final class Prefs {
     public static void setAdvMaxGapMs(Context c, int ms) {
         SharedPreferences p = get(c);
         if (p != null) p.edit().putInt(ADV_MAX_GAP_MS, Math.max(0, ms)).apply();
+    }
+
+    /** 1start 的自定义反应上限（毫秒），0 表示用内置 450ms */
+    public static int advStart1Ms(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_START1_MS, 0);
+    }
+
+    public static void setAdvStart1Ms(Context c, int ms) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_START1_MS, Math.max(0, ms)).apply();
     }
 
     /** 非新纪录时不展示成绩，直接自动下一把 */
