@@ -38,13 +38,16 @@ public final class AdvancedSchulte {
     static final int MID = 3;        // 归中：1,n²,2,n²-1...
     static final int MAXN = 4;       // max≤N：相邻两数间隔 ≤ N 秒
     static final int START1 = 5;     // 1start：开局点 1 的反应 ≤ 0.45s
+    static final int RANGE = 6;      // 顺序区间：起点 → 终点（递增）
+    static final int RANGE_REV = 7;  // 倒序区间：起点 → 终点（递减）
 
     static final String[] NAMES = {
-            "顺序模式", "爆手速训练", "倒序训练", "归中训练", "max≤N训练", "1start训练"};
+            "顺序模式", "爆手速训练", "倒序训练", "归中训练", "max≤N训练", "1start训练",
+            "顺序区间训练", "倒序区间训练"};
 
     /** 成绩面板上「简单-顺序」这种后缀用的短名 */
     static final String[] SHORT = {
-            "顺序", "爆手速", "倒序", "归中", "max≤N", "1start"};
+            "顺序", "爆手速", "倒序", "归中", "max≤N", "1start", "顺序区间", "倒序区间"};
 
     static final String[] DESCS = {
             "从头点到尾（1→n²），默认模式，即官方的正常模式。",
@@ -60,7 +63,11 @@ public final class AdvancedSchulte {
                     + "N 参考值：3 阶 0.1 / 4 阶 0.2 / 5 阶 0.25 / 6 阶 0.4 / 7 阶 0.75 / "
                     + "8 阶 1.0 / 9 阶 1.75 / 10 阶 3.0。\n\n长期练习可以减少卡顿。",
             "仅低阶（3-5 阶）。强制减少开局点 1 的反应时间（默认应 ≤ 0.45 秒，"
-                    + "可在弹窗里自定义毫秒），超过则重开。"};
+                    + "可在弹窗里自定义毫秒），超过则重开。",
+            "顺序区间：从起点数字点到终点数字（起点 < 终点 ≤ n²），中间的数字按顺序全部点到。"
+                    + "适合只练某一段数字的识别。",
+            "倒序区间：从起点数字递减点到终点数字（起点 ≤ n²，终点 < 起点）。"
+                    + "与倒序同组，只练某一段大数。"};
 
     private static final String VIEW = "com.star.minesweeping.module.game.schulte.core.SchulteView";
     private static final String ACTIVITY =
@@ -92,6 +99,8 @@ public final class AdvancedSchulte {
     private static volatile int chartN;
     /** 曲线实际的点数（爆手速时等于目标 x），用来收敛 X 轴刻度 */
     private static volatile int chartCount;
+    /** 区间模式的实际起点（成绩面板 / 曲线提示的序号按它算） */
+    static volatile int chartStart = 1;
     private static volatile boolean chartHooked;
     private static volatile boolean chartAxisHooked;
     private static volatile boolean detailHooked;
@@ -109,6 +118,8 @@ public final class AdvancedSchulte {
     private static final int ACCENT_MID = 0xFFA46BFF;
     private static final int ACCENT_MAXN = 0xFF2ED47A;
     private static final int ACCENT_START1 = 0xFFFFC53D;
+    private static final int ACCENT_RANGE = 0xFF00BFA5;
+    private static final int ACCENT_RANGE_REV = 0xFFEF6C9C;
 
     private AdvancedSchulte() {
     }
@@ -130,6 +141,9 @@ public final class AdvancedSchulte {
         long reaction;
         long maxGap;
         boolean done;
+        /** 区间模式：本局起点 / 终点（其它模式 1 / n²） */
+        int start = 1;
+        int end;
         /** 简单/简单打乱会把点过的格子值置 0，这里留一份原始棋盘用于结算后还原展示 */
         int[][] orig;
     }
@@ -374,10 +388,15 @@ public final class AdvancedSchulte {
         }
     }
 
+    /** 曲线的「序号」是否要换算成实际点击的数字（倒序 / 归中 / 两个区间模式） */
+    private static boolean seriesNumbered(int mode) {
+        return mode == REVERSE || mode == MID || mode == RANGE || mode == RANGE_REV;
+    }
+
     private static void decorateDetailRow(XC_MethodHook.MethodHookParam param) {
         int mode = chartMode;
         int n = chartN;
-        if ((mode != REVERSE && mode != MID) || n <= 0) return;
+        if (!seriesNumbered(mode) || n <= 0) return;
         if (param.args.length < 1 || param.args[0] == null) return;
         Object holder = param.args[0];
         try {
@@ -411,7 +430,7 @@ public final class AdvancedSchulte {
             }
             return;
         }
-        if (mode != REVERSE && mode != MID) return;
+        if (!seriesNumbered(mode)) return;
         Object res = param.getResult();
         if (!(res instanceof String)) return;
         int k = parseInt((String) res);
@@ -476,7 +495,7 @@ public final class AdvancedSchulte {
     private static void decorateMarker(XC_MethodHook.MethodHookParam param) {
         int mode = chartMode;
         int n = chartN;
-        if ((mode != REVERSE && mode != MID) || n <= 0) return;
+        if (!seriesNumbered(mode) || n <= 0) return;
         if (param.args.length < 1 || param.args[0] == null) return;
         try {
             // 用 Entry.x 反推序号（不要解析现有文本，避免重复刷新时把自己改过的数字当序号）
@@ -512,6 +531,10 @@ public final class AdvancedSchulte {
                 return total - (k - 1);
             case MID:
                 return (k % 2 == 1) ? (k + 1) / 2 : total - (k - 1) / 2;
+            case RANGE:
+                return chartStart + (k - 1);
+            case RANGE_REV:
+                return chartStart - (k - 1);
             default:
                 return k;
         }
@@ -723,7 +746,23 @@ public final class AdvancedSchulte {
         Round r = new Round();
         r.mode = mode;
         r.n = n;
-        r.x = target(mode, n, Prefs.advX(c));
+        int total = n * n;
+        r.start = 1;
+        r.end = total;
+        if (mode == RANGE) {
+            int s = Prefs.advRangeStart(c);
+            int e = Prefs.advRangeEnd(c);
+            r.start = clamp(s <= 0 ? 1 : s, 1, total - 1);
+            r.end = clamp(e <= 0 ? total : e, r.start + 1, total);
+        } else if (mode == RANGE_REV) {
+            int s = Prefs.advRangeRevStart(c);
+            int e = Prefs.advRangeRevEnd(c);
+            r.start = clamp(s <= 0 ? total : s, 2, total);
+            r.end = clamp(e <= 0 ? 1 : e, 1, r.start - 1);
+        }
+        r.x = (mode == RANGE || mode == RANGE_REV)
+                ? (r.end - r.start + 1)
+                : target(mode, n, Prefs.advX(c));
         try {
             r.type = (Integer) XposedHelpers.callMethod(g, "l");
         } catch (Throwable ignored) {
@@ -766,7 +805,9 @@ public final class AdvancedSchulte {
         boolean record = best <= 0 || shown < best;
         if (record) Prefs.setLong(c, key, shown);
         // 本地历史（今日统计 / 本地页 / 高级模式排名共用），只存本机不上传
-        AdvStore.add(c, r.mode, r.type, r.blind, r.n, r.x, shown, r.reaction, r.errors);
+        AdvStore.add(c, r.mode, r.type, r.blind, r.n, r.x, shown, r.reaction, r.errors,
+                (r.mode == RANGE || r.mode == RANGE_REV) ? r.start : 0,
+                (r.mode == RANGE || r.mode == RANGE_REV) ? r.end : 0);
         MainHook.log("高级模式完成: " + NAMES[r.mode] + " n=" + r.n + " x=" + r.x
                 + " type=" + r.type + " blind=" + r.blind
                 + " elapsed=" + elapsed + " shown=" + shown + " best=" + best + " record=" + record);
@@ -910,6 +951,7 @@ public final class AdvancedSchulte {
             chartMode = r.mode;
             chartN = r.n;
             chartCount = Math.max(1, r.x);
+            chartStart = r.start;
             Object dlg = XposedHelpers.newInstance(dlgCls,
                     new Class<?>[]{record.getClass(), successCls, boolean.class},
                     record, success, Boolean.FALSE);
@@ -1192,6 +1234,10 @@ public final class AdvancedSchulte {
                 return total - r.idx;
             case MID:
                 return (r.idx % 2 == 0) ? r.idx / 2 + 1 : total - r.idx / 2;
+            case RANGE:
+                return r.start + r.idx;
+            case RANGE_REV:
+                return r.start - r.idx;
             default:
                 return r.idx + 1;
         }
@@ -1438,7 +1484,13 @@ public final class AdvancedSchulte {
     /** 最佳记录按 官方模式(type/blind) × 高级模式 × 阶数 分开，爆手速再带上目标 x */
     private static String bestKey(Round r) {
         return "adv_best_" + r.type + "_" + (r.blind ? 1 : 0) + "_" + r.mode + "_" + r.n
-                + (r.mode == SPEED ? "_" + r.x : "");
+                + (r.mode == SPEED ? "_" + r.x : "")
+                + ((r.mode == RANGE || r.mode == RANGE_REV)
+                ? "_" + r.start + "_" + r.end : "");
+    }
+
+    static int clamp(int v, int min, int max) {
+        return v < min ? min : (v > max ? max : v);
     }
 
     static String fmt(long ms) {
@@ -1457,6 +1509,10 @@ public final class AdvancedSchulte {
                 return ACCENT_MAXN;
             case START1:
                 return ACCENT_START1;
+            case RANGE:
+                return ACCENT_RANGE;
+            case RANGE_REV:
+                return ACCENT_RANGE_REV;
             default:
                 return 0xFF8C8C8C;
         }

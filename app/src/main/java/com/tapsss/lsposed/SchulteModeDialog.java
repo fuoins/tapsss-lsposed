@@ -22,15 +22,17 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
+import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
  * 「模式与阶数」弹窗：复用 App 自己的 SquareSizeDialog（com.star.minesweeping.k.b.z3），
  * 保留原版卡片背景、标题和阶数格子，在标题下方插入：
  *  1. 官方模式（6 个格子，与阶数格子同款）；
- *  2. 高级模式（顺序/爆手速/倒序/归中/max≤N/1start，每个模式旁有 i 查看说明）；
- *  3. 爆手速的目标 x（1..n²）；
- * 底部额外放「舒尔特设置」「模块设置」两个文字按钮。
+ *  2. 高级模式（顺序/爆手速/倒序/归中/max≤N/1start/顺序区间/倒序区间，每个模式旁有 i 查看说明）；
+ *  3. 爆手速的目标 x（1..n²）、顺序/倒序区间的起点与终点；
+ * 底部额外放「舒尔特设置」「模块设置」两个文字按钮，最下面是「确认」——
+ * 弹窗里的所有选择都只是暂存，点确认才生效并关闭。
  */
 public final class SchulteModeDialog {
 
@@ -50,9 +52,15 @@ public final class SchulteModeDialog {
             {1, 0}, {1, 1}, {2, 0}, {0, 0}, {0, 1}, {3, 0}};
 
     private static final String[] ADV_LABELS = {
-            "顺序", "爆手速", "倒序", "归中", "max≤N", "1start"};
+            "顺序", "爆手速", "倒序", "归中", "max≤N", "1start", "顺序区间", "倒序区间"};
 
     private static final int LINK_COLOR = 0xFF6FA8FF;
+
+    /** 阶数格子被点击时，把选中阶数暂存到这里（int[1]，与弹窗里的 pickedLevel 同一个对象） */
+    private static final String KEY_PICKED_LEVEL = "tapsss_mode_picked_level";
+    /** 阶数变化后刷新弹窗提示用 */
+    private static final String KEY_REFRESH_ADV = "tapsss_mode_refresh_adv";
+    private static volatile boolean itemClickHooked;
 
     private SchulteModeDialog() {
     }
@@ -72,10 +80,13 @@ public final class SchulteModeDialog {
             final int[] picked = {indexOf(curType, curBlind)};
             /** 已生效的 {type, blind(0/1), level}，连续点多个格子时以此为准 */
             final int[] applied = {curType, curBlind ? 1 : 0, curLevel};
+            /** 弹窗里暂存的阶数：点格子只改这里，点「确认」才真正应用 */
+            final int[] pickedLevel = {curLevel};
             /** 已生效的高级模式（0=顺序/关闭，其余与 AdvancedSchulte 的常量一致） */
             final int[] adv = {Prefs.advMode(act)};
             final Object dlg = newInstance(dlgCls, new Class<?>[]{int.class, int.class, int.class},
                     curLevel, 3, 10);
+            installItemClickHook(cl);
 
             Object binding = XposedHelpers.getObjectField(dlg, "a");
             View root = (View) XposedHelpers.callMethod(binding, "getRoot");
@@ -134,7 +145,7 @@ public final class SchulteModeDialog {
 
             final View[] advChips = new View[ADV_LABELS.length];
             final TextView[] advInfos = new TextView[ADV_LABELS.length];
-            for (int row = 0; row < 3; row++) {
+            for (int row = 0; row < (ADV_LABELS.length + 1) / 2; row++) {
                 LinearLayout line = new LinearLayout(act);
                 line.setOrientation(LinearLayout.HORIZONTAL);
                 for (int col = 0; col < 2; col++) {
@@ -288,6 +299,33 @@ public final class SchulteModeDialog {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             column.addView(startWrap);
 
+            // 区间模式：起点 / 终点
+            final EditText rangeStartInput = numberInput(act, textColor);
+            final EditText rangeEndInput = numberInput(act, textColor);
+            final LinearLayout rangeWrap = new LinearLayout(act);
+            rangeWrap.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout rangeRow1 = labelInputRow(act, "起点", rangeStartInput);
+            LinearLayout rangeRow2 = labelInputRow(act, "终点", rangeEndInput);
+            rangeWrap.addView(rangeRow1, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            rangeWrap.addView(rangeRow2, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            column.addView(rangeWrap);
+
+            final Runnable loadRange = new Runnable() {
+                @Override
+                public void run() {
+                    int total = pickedLevel[0] * pickedLevel[0];
+                    boolean rev = adv[0] == AdvancedSchulte.RANGE_REV;
+                    int s = rev ? Prefs.advRangeRevStart(act) : Prefs.advRangeStart(act);
+                    int e = rev ? Prefs.advRangeRevEnd(act) : Prefs.advRangeEnd(act);
+                    rangeStartInput.setText(s <= 0 ? "" : String.valueOf(s));
+                    rangeEndInput.setText(e <= 0 ? "" : String.valueOf(e));
+                    rangeStartInput.setHint(rev ? "留空 = " + total : "留空 = 1");
+                    rangeEndInput.setHint(rev ? "留空 = 1" : "留空 = " + total);
+                }
+            };
+
             final Runnable refreshAdv = new Runnable() {
                 @Override
                 public void run() {
@@ -300,7 +338,10 @@ public final class SchulteModeDialog {
                             ? View.VISIBLE : View.GONE);
                     startWrap.setVisibility(adv[0] == AdvancedSchulte.START1
                             ? View.VISIBLE : View.GONE);
-                    int total = applied[2] * applied[2];
+                    rangeWrap.setVisibility(adv[0] == AdvancedSchulte.RANGE
+                            || adv[0] == AdvancedSchulte.RANGE_REV
+                            ? View.VISIBLE : View.GONE);
+                    int total = pickedLevel[0] * pickedLevel[0];
                     // 换阶数后目标 x 的上限跟着变：超了压回新上限并同步到输入框
                     int saved = Prefs.advX(act);
                     if (saved > total) {
@@ -309,11 +350,25 @@ public final class SchulteModeDialog {
                     }
                     xInput.setHint("留空 = 全部 " + total);
                     gapInput.setHint("留空 = 内置 "
-                            + AdvancedSchulte.fmt(AdvancedSchulte.builtinMaxGapMs(applied[2])));
+                            + AdvancedSchulte.fmt(AdvancedSchulte.builtinMaxGapMs(pickedLevel[0])));
                     startInput.setHint("留空 = 内置 " + AdvancedSchulte.builtinStart1Ms());
+                    if (adv[0] == AdvancedSchulte.RANGE) {
+                        rangeStartInput.setHint("留空 = 1");
+                        rangeEndInput.setHint("留空 = " + total);
+                    } else if (adv[0] == AdvancedSchulte.RANGE_REV) {
+                        rangeStartInput.setHint("留空 = " + total);
+                        rangeEndInput.setHint("留空 = 1");
+                    }
                 }
             };
             refreshAdv.run();
+            // 打开弹窗时已经是区间模式：先把已保存的起点/终点填进去
+            if (adv[0] == AdvancedSchulte.RANGE || adv[0] == AdvancedSchulte.RANGE_REV) {
+                loadRange.run();
+            }
+            // 供阶数点击拦截使用：选中阶数暂存 + 刷新提示
+            XposedHelpers.setAdditionalInstanceField(dlg, KEY_PICKED_LEVEL, pickedLevel);
+            XposedHelpers.setAdditionalInstanceField(dlg, KEY_REFRESH_ADV, refreshAdv);
 
             xInput.addTextChangedListener(new TextWatcher() {
                 @Override
@@ -333,7 +388,7 @@ public final class SchulteModeDialog {
                         return;
                     }
                     if (v < 0) v = 0;
-                    int max = Math.max(1, applied[2] * applied[2]);
+                    int max = Math.max(1, pickedLevel[0] * pickedLevel[0]);
                     Prefs.setAdvX(act, Math.min(v, max));
                 }
             });
@@ -385,19 +440,12 @@ public final class SchulteModeDialog {
                 advChips[i].setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        if (idx == AdvancedSchulte.START1
-                                && (applied[2] < 3 || applied[2] > 5)) {
-                            Ui.toast(act, "1start 训练仅支持 3-5 阶");
-                            return;
-                        }
-                        if (adv[0] == idx) return;   // 没有变化：留着弹窗让用户继续改
+                        if (adv[0] == idx) return;   // 没有变化：留在弹窗继续改
                         adv[0] = idx;
-                        Prefs.setAdvMode(act, idx);
                         refreshAdv.run();
-                        // 切换高级模式后直接关窗并重建本局，状态立刻生效
-                        ((Dialog) dlg).dismiss();
-                        AdvancedSchulte.resetRound(act);
-                        Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[idx]);
+                        if (idx == AdvancedSchulte.RANGE || idx == AdvancedSchulte.RANGE_REV) {
+                            loadRange.run();
+                        }
                     }
                 });
                 TextView info = advInfos[i];
@@ -418,11 +466,7 @@ public final class SchulteModeDialog {
                         for (int k = 0; k < chips.length; k++) {
                             if (chips[k] != null) styleCell(act, chips[k], k == idx);
                         }
-                        // 点模式格子立即切模式，无需再去点阶数格子。
-                        // 注意：这里不动高级模式 —— 高级模式是在当前官方模式之上叠加规则，
-                        // 切官方模式不应该把高级模式退回「顺序」
-                        apply(act, (Dialog) dlg, applied, MODES[idx][0],
-                                MODES[idx][1] == 1, applied[2], refreshAdv);
+                        // 只暂存选择，点底部「确认」才真正切换模式 / 重建本局
                     }
                 });
             }
@@ -478,8 +522,89 @@ public final class SchulteModeDialog {
             footer.addView(moduleSetting, new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+            // ------------------------------------------------ 最底部「确认」
+            // 区间模式的起点/终点是边输入边存的，这里记一份打开弹窗时的值，
+            // 确认时若改过就重开本局，让新区间立刻生效
+            final int[] rangeSnapshot = {
+                    Prefs.advRangeStart(act), Prefs.advRangeEnd(act),
+                    Prefs.advRangeRevStart(act), Prefs.advRangeRevEnd(act)};
+            final Runnable applyAndClose = new Runnable() {
+                @Override
+                public void run() {
+                    int level = pickedLevel[0];
+                    int advMode = adv[0];
+                    int total = level * level;
+                    if (advMode == AdvancedSchulte.START1 && (level < 3 || level > 5)) {
+                        Ui.toast(act, "1start 训练仅支持 3-5 阶");
+                        return;
+                    }
+                    // 区间同样是「确认才生效」：输入框里的值在这里才写进 Prefs
+                    int rs = parseOrZero(rangeStartInput.getText().toString());
+                    int re = parseOrZero(rangeEndInput.getText().toString());
+                    boolean rangeEdited = false;
+                    if (advMode == AdvancedSchulte.RANGE) {
+                        int s = rs <= 0 ? 1 : rs;
+                        int e = re <= 0 ? total : re;
+                        if (s < 1 || s >= e || e > total) {
+                            Ui.toast(act, "顺序区间需满足 1 ≤ 起点 < 终点 ≤ " + total);
+                            return;
+                        }
+                        rangeEdited = rs != rangeSnapshot[0] || re != rangeSnapshot[1];
+                        Prefs.setAdvRangeStart(act, rs);
+                        Prefs.setAdvRangeEnd(act, re);
+                    } else if (advMode == AdvancedSchulte.RANGE_REV) {
+                        int s = rs <= 0 ? total : rs;
+                        int e = re <= 0 ? 1 : re;
+                        if (s > total || s <= e || e < 1) {
+                            Ui.toast(act, "倒序区间需满足 1 ≤ 终点 < 起点 ≤ " + total);
+                            return;
+                        }
+                        rangeEdited = rs != rangeSnapshot[2] || re != rangeSnapshot[3];
+                        Prefs.setAdvRangeRevStart(act, rs);
+                        Prefs.setAdvRangeRevEnd(act, re);
+                    }
+                    if (advMode != Prefs.advMode(act)) {
+                        Prefs.setAdvMode(act, advMode);
+                        AdvancedSchulte.resetRound(act);
+                        Ui.toast(act, "已切换为 " + AdvancedSchulte.NAMES[advMode]);
+                    } else if (rangeEdited) {
+                        AdvancedSchulte.resetRound(act);
+                        Ui.toast(act, "区间已更新，已重开本局");
+                    }
+                    int type = MODES[picked[0]][0];
+                    boolean blind = MODES[picked[0]][1] == 1;
+                    apply(act, (Dialog) dlg, applied, type, blind, level, refreshAdv);
+                    try {
+                        if (((Dialog) dlg).isShowing()) ((Dialog) dlg).dismiss();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            };
+
+            View confirm = (View) newInstance(btnCls, new Class<?>[]{Context.class}, act);
+            XposedHelpers.callMethod(confirm, "setRadius", Ui.dp(act, 6));
+            XposedHelpers.callMethod(confirm, "setText", "确认");
+            centerText(act, confirm);
+            styleCell(act, confirm, true);
+            confirm.setClickable(true);
+            confirm.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    applyAndClose.run();
+                }
+            });
+            // extra_layout 是 FrameLayout，多个子 View 会互相叠住：
+            // 文字按钮与「确认」合成一个竖向容器，一次加进去
+            LinearLayout bottom = new LinearLayout(act);
+            bottom.setOrientation(LinearLayout.VERTICAL);
+            bottom.addView(footer, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams confirmLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(act, 46));
+            confirmLp.topMargin = Ui.dp(act, 2);
+            bottom.addView(confirm, confirmLp);
             callDialogMethod(dlg, "m", new Class<?>[]{View.class, ViewGroup.LayoutParams.class},
-                    footer, new FrameLayout.LayoutParams(
+                    bottom, new FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
             Object callback = Proxy.newProxyInstance(cl, new Class<?>[]{cbCls},
@@ -487,8 +612,8 @@ public final class SchulteModeDialog {
                         @Override
                         public Object invoke(Object proxy, Method method, Object[] args) {
                             if (args != null && args.length == 1 && args[0] instanceof Integer) {
-                                apply(act, (Dialog) dlg, applied, applied[0],
-                                        applied[1] == 1, (Integer) args[0], refreshAdv);
+                                pickedLevel[0] = (Integer) args[0];
+                                refreshAdv.run();
                             }
                             return null;
                         }
@@ -500,6 +625,87 @@ public final class SchulteModeDialog {
             MainHook.log("打开模式与阶数弹窗失败: " + t);
             Ui.toast(act, "打开模式与阶数失败: " + t);
         }
+    }
+
+    /**
+     * 官方阶数格子点击（z3.o(c,View,int)）第一句就是 dismiss()，
+     * 这里只拦「本模块创建的弹窗」：点击不关窗，只把阶数暂存下来等「确认」。
+     */
+    private static void installItemClickHook(final ClassLoader cl) {
+        if (itemClickHooked) return;
+        try {
+            Class<?> adapterCls = XposedHelpers.findClass("com.chad.library.b.a.c", cl);
+            XposedHelpers.findAndHookMethod(DIALOG, cl, "o", adapterCls, View.class, int.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Object dlg = param.thisObject;
+                            Object picked = XposedHelpers.getAdditionalInstanceField(
+                                    dlg, KEY_PICKED_LEVEL);
+                            if (!(picked instanceof int[])) return;   // 不是本模块弹窗，走官方逻辑
+                            param.setResult(null);                    // 不让弹窗自己 dismiss
+                            try {
+                                Object level = XposedHelpers.callMethod(param.args[0], "q0",
+                                        (Integer) param.args[2]);
+                                if (level instanceof Integer) {
+                                    ((int[]) picked)[0] = (Integer) level;
+                                    Object refresh = XposedHelpers.getAdditionalInstanceField(
+                                            dlg, KEY_REFRESH_ADV);
+                                    if (refresh instanceof Runnable) ((Runnable) refresh).run();
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+            itemClickHooked = true;
+        } catch (Throwable t) {
+            MainHook.log("模式弹窗阶数点击拦截失败: " + t);
+        }
+    }
+
+    /** 输入框内容转数字：空 / 非法一律当 0（0 表示用默认区间） */
+    private static int parseOrZero(String s) {
+        try {
+            return s == null || s.isEmpty() ? 0 : Integer.parseInt(s);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 数字输入框：与「目标 x」「间隔 N」同款样式 */
+    private static EditText numberInput(Activity act, int textColor) {
+        int tint = textColor & 0x00FFFFFF;
+        EditText input = new EditText(act);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setTextSize(14);
+        input.setTextColor(textColor);
+        input.setHintTextColor(tint | 0x66000000);
+        input.setPadding(Ui.dp(act, 8), 0, Ui.dp(act, 8), 0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(tint | 0x1F000000);
+        bg.setCornerRadius(Ui.dp(act, 4));
+        input.setBackground(bg);
+        return input;
+    }
+
+    /** 「标签 + 数字输入」一行，给区间的起点/终点用 */
+    private static LinearLayout labelInputRow(Activity act, String label, EditText input) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Ui.dp(act, 3), Ui.dp(act, 4), Ui.dp(act, 3), 0);
+        TextView tv = new TextView(act);
+        tv.setText(label);
+        tv.setTextSize(12);
+        tv.setAlpha(0.85f);
+        row.addView(tv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
+                0, Ui.dp(act, 36), 1f);
+        inputLp.leftMargin = Ui.dp(act, 8);
+        row.addView(input, inputLp);
+        return row;
     }
 
     private static TextView sectionLabel(Activity act, String text) {

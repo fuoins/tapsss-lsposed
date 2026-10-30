@@ -58,7 +58,7 @@ public final class AdvancedPages {
 
     /** 第一位是「不使用高级模式」（官方榜单） */
     private static final String[] ADV_LABELS = {
-            "无", "爆手速", "倒序", "归中", "max≤N", "1start"};
+            "无", "爆手速", "倒序", "归中", "max≤N", "1start", "顺序区间", "倒序区间"};
 
     private static final String[] LOCAL_LABELS = {"官方记录", "高级模式"};
 
@@ -399,7 +399,7 @@ public final class AdvancedPages {
         mid.setPadding(Ui.dp(act, 8), 0, Ui.dp(act, 8), 0);
 
         TextView title = new TextView(act);
-        title.setText(rec.levelText() + " · " + rec.label()
+        title.setText(rec.levelText() + " · " + rec.label() + rec.rangeText()
                 + (rec.mode == AdvancedSchulte.SPEED ? " · x=" + rec.x : ""));
         title.setTextSize(14);
         title.setTextColor(color(act, "normal", 0xFF333333));
@@ -668,7 +668,7 @@ public final class AdvancedPages {
         top.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView left = new TextView(act);
-        left.setText(rec.levelText() + " · " + rec.label()
+        left.setText(rec.levelText() + " · " + rec.label() + rec.rangeText()
                 + (rec.mode == AdvancedSchulte.SPEED ? " · x=" + rec.x : ""));
         left.setTextSize(14);
         left.setTextColor(color(act, "normal", 0xFF333333));
