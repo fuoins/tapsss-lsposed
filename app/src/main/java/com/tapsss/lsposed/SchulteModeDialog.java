@@ -16,11 +16,13 @@ import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
@@ -130,6 +132,7 @@ public final class SchulteModeDialog {
             TextView advTitle = new TextView(act);
             advTitle.setText("高级模式");
             advTitle.setTextSize(13);
+            advTitle.setTextColor(dialogTextColor(act));
             advTitle.getPaint().setFakeBoldText(true);
             advHeader.addView(advTitle);
             TextView advHint = new TextView(act);
@@ -137,7 +140,7 @@ public final class SchulteModeDialog {
             advHint.setText("v" + MainHook.VERSION + " · "
                     + AdvancedSchulte.statusText() + " · 点 i 看说明");
             advHint.setTextSize(10);
-            advHint.setAlpha(0.55f);
+            advHint.setTextColor(LINK_COLOR);
             advHint.setGravity(Gravity.END);
             advHeader.addView(advHint, new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -189,7 +192,7 @@ public final class SchulteModeDialog {
             TextView xLabel = new TextView(act);
             xLabel.setText("目标 x");
             xLabel.setTextSize(12);
-            xLabel.setAlpha(0.85f);
+            xLabel.setTextColor(dialogTextColor(act));
             xRow.addView(xLabel, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             final EditText xInput = new EditText(act);
@@ -225,7 +228,7 @@ public final class SchulteModeDialog {
             TextView gapLabel = new TextView(act);
             gapLabel.setText("间隔 N");
             gapLabel.setTextSize(12);
-            gapLabel.setAlpha(0.85f);
+            gapLabel.setTextColor(dialogTextColor(act));
             gapRow.addView(gapLabel, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             final EditText gapInput = new EditText(act);
@@ -248,7 +251,7 @@ public final class SchulteModeDialog {
             TextView gapUnit = new TextView(act);
             gapUnit.setText("ms");
             gapUnit.setTextSize(12);
-            gapUnit.setAlpha(0.7f);
+            gapUnit.setTextColor(dialogTextColor(act));
             gapUnit.setPadding(Ui.dp(act, 6), 0, 0, 0);
             gapRow.addView(gapUnit, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -266,7 +269,7 @@ public final class SchulteModeDialog {
             TextView startLabel = new TextView(act);
             startLabel.setText("反应 ≤");
             startLabel.setTextSize(12);
-            startLabel.setAlpha(0.85f);
+            startLabel.setTextColor(dialogTextColor(act));
             startRow.addView(startLabel, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
             final EditText startInput = new EditText(act);
@@ -289,7 +292,7 @@ public final class SchulteModeDialog {
             TextView startUnit = new TextView(act);
             startUnit.setText("ms");
             startUnit.setTextSize(12);
-            startUnit.setAlpha(0.7f);
+            startUnit.setTextColor(dialogTextColor(act));
             startUnit.setPadding(Ui.dp(act, 6), 0, 0, 0);
             startRow.addView(startUnit, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -645,10 +648,14 @@ public final class SchulteModeDialog {
                             if (!(picked instanceof int[])) return;   // 不是本模块弹窗，走官方逻辑
                             param.setResult(null);                    // 不让弹窗自己 dismiss
                             try {
-                                Object level = XposedHelpers.callMethod(param.args[0], "q0",
+                                Object adapter = param.args[0];
+                                Object level = XposedHelpers.callMethod(adapter, "q0",
                                         (Integer) param.args[2]);
                                 if (level instanceof Integer) {
                                     ((int[]) picked)[0] = (Integer) level;
+                                    // 官方格子选中态来自 adapter 的 k0 集合，点一下就把
+                                    // 集合换成新阶数并刷新列表，否则高亮还停在旧阶数上
+                                    refreshAdapterSelection(adapter, (Integer) level);
                                     Object refresh = XposedHelpers.getAdditionalInstanceField(
                                             dlg, KEY_REFRESH_ADV);
                                     if (refresh instanceof Runnable) ((Runnable) refresh).run();
@@ -660,6 +667,25 @@ public final class SchulteModeDialog {
             itemClickHooked = true;
         } catch (Throwable t) {
             MainHook.log("模式弹窗阶数点击拦截失败: " + t);
+        }
+    }
+
+    /**
+     * 官方阶数格子的选中态来自 adapter 的私有集合 k0：
+     * 绑定时按 setSelected(k0.contains(item)) 画高亮。只改暂存阶数而不动这个集合，
+     * 格子就会一直高亮在旧阶数上，所以这里把集合换成新阶数并让列表重新绑定。
+     */
+    private static void refreshAdapterSelection(Object adapter, int level) {
+        try {
+            Object selected = XposedHelpers.getObjectField(adapter, "k0");
+            if (!(selected instanceof Set)) return;
+            @SuppressWarnings("unchecked")
+            Set<Integer> set = (Set<Integer>) selected;
+            set.clear();
+            set.add(level);
+            XposedHelpers.callMethod(adapter, "notifyDataSetChanged");
+        } catch (Throwable t) {
+            MainHook.log("阶数选中态刷新失败: " + t);
         }
     }
 
@@ -698,7 +724,7 @@ public final class SchulteModeDialog {
         TextView tv = new TextView(act);
         tv.setText(label);
         tv.setTextSize(12);
-        tv.setAlpha(0.85f);
+        tv.setTextColor(dialogTextColor(act));
         row.addView(tv, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(
@@ -711,8 +737,9 @@ public final class SchulteModeDialog {
     private static TextView sectionLabel(Activity act, String text) {
         TextView tv = new TextView(act);
         tv.setText(text);
-        tv.setTextSize(11);
-        tv.setAlpha(0.55f);
+        tv.setTextSize(12);
+        tv.setTextColor(dialogTextColor(act));
+        tv.getPaint().setFakeBoldText(true);
         tv.setPadding(Ui.dp(act, 4), Ui.dp(act, 3), 0, 0);
         return tv;
     }
@@ -736,7 +763,7 @@ public final class SchulteModeDialog {
     }
 
     /** 弹窗正文颜色：跟随 App 自己阶数格子的文字色（浅色 #283437 / 深色 #d6e0e2） */
-    private static int dialogTextColor(Activity act) {
+    static int dialogTextColor(Activity act) {
         try {
             Class<?> colorHelper = XposedHelpers.findClass(COLOR_HELPER, act.getClassLoader());
             Object color = XposedHelpers.callStaticMethod(colorHelper, "d",
@@ -761,11 +788,35 @@ public final class SchulteModeDialog {
         return tv;
     }
 
+    /** 高级模式说明：与模块设置页同款排版（深色正文、蓝色副标题、可滚动） */
     private static void showDesc(Activity act, int idx) {
         try {
+            int textColor = dialogTextColor(act);
+            LinearLayout content = new LinearLayout(act);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(Ui.dp(act, 22), Ui.dp(act, 6), Ui.dp(act, 22), Ui.dp(act, 4));
+
+            TextView tag = new TextView(act);
+            tag.setText("高级模式 · 成绩仅本地记录，不上传");
+            tag.setTextSize(11);
+            tag.setTextColor(LINK_COLOR);
+            content.addView(tag);
+
+            TextView body = new TextView(act);
+            body.setText(AdvancedSchulte.DESCS[idx]);
+            body.setTextSize(14);
+            body.setTextColor(textColor);
+            body.setLineSpacing(0, 1.35f);
+            body.setPadding(0, Ui.dp(act, 10), 0, 0);
+            content.addView(body);
+
+            ScrollView sv = new ScrollView(act);
+            sv.addView(content, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
             new AlertDialog.Builder(act)
                     .setTitle(AdvancedSchulte.NAMES[idx])
-                    .setMessage(AdvancedSchulte.DESCS[idx])
+                    .setView(sv)
                     .setPositiveButton("知道了", null)
                     .show();
         } catch (Throwable t) {

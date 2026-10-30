@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -14,6 +15,9 @@ import android.widget.TextView;
 
 /** 模块设置界面：一级为游戏列表，二级为各游戏/账号选项。 */
 public final class ModuleSettings {
+
+    /** 「已启用」等强调色，与模式弹窗的链接色一致 */
+    private static final int ACCENT = 0xFF4C8DFF;
 
     private ModuleSettings() {
     }
@@ -42,24 +46,26 @@ public final class ModuleSettings {
     static void showSchulte(final Activity act) {
         final Context c = act;
         LinearLayout root = vertical(c);
-        root.addView(hint(c, "以下为本模块新增的功能，App 原有设置（如开始倒计时）保持不变"));
+        root.addView(hint(act, "以下为本模块新增的功能，App 原有设置（如开始倒计时）保持不变"));
 
-        final CheckBox cbBlock = check(c, "取消倒计时期间点击会立即开始", Prefs.blockTouch(c));
+        final CheckBox cbBlock = check(act, "取消倒计时期间点击会立即开始", Prefs.blockTouch(c));
         root.addView(cbBlock);
-        root.addView(hint(c, "勾选后：倒计时期间点击棋盘不会跳过倒计时"));
+        root.addView(hint(act, "勾选后：倒计时期间点击棋盘不会跳过倒计时"));
 
-        final CheckBox cbAutoNext = check(c,
+        final CheckBox cbAutoNext = check(act,
                 "非新纪录不展示成绩，自动下一把", Prefs.autoNextNoRecord(c));
         root.addView(cbAutoNext);
-        root.addView(hint(c, "勾选后：高级模式每局结束若没有刷新纪录（含失败/点错），不展示成绩直接下一把"));
-        root.addView(hint(c, "关掉后：每局结束都会显示成绩或失败原因"));
-        root.addView(hint(c, "注意：某个模式/阶数/目标 x 的第一次完成一定算新纪录，会正常显示"));
+        root.addView(hint(act, "勾选后：高级模式每局结束若没有刷新纪录（含失败/点错），不展示成绩直接下一把"));
+        root.addView(hint(act, "关掉后：每局结束都会显示成绩或失败原因"));
+        root.addView(hint(act, "注意：某个模式/阶数/目标 x 的第一次完成一定算新纪录，会正常显示"));
 
-        root.addView(feature(c, "高级模式（顺序/爆手速/倒序/归中/max≤N/1start，成绩仅本地记录，不上传）"));
-        root.addView(feature(c, "右上角阶数弹窗增强"));
-        root.addView(feature(c, "倒计时取消下限限制"));
-        root.addView(feature(c, "重开预设"));
-        root.addView(hint(c, "一键预设入口：App 设置 → 舒尔特方格 → 重开，页面顶部的「重开预设」按钮"
+        root.addView(feature(act,
+                "高级模式（顺序/爆手速/倒序/归中/max≤N/1start/顺序区间/倒序区间，"
+                        + "成绩仅本地记录，不上传）"));
+        root.addView(feature(act, "右上角阶数弹窗增强"));
+        root.addView(feature(act, "倒计时取消下限限制"));
+        root.addView(feature(act, "重开预设"));
+        root.addView(hint(act, "一键预设入口：App 设置 → 舒尔特方格 → 重开，页面顶部的「重开预设」按钮"
                 + "（含「错一个就重开」：一次把所有模式、所有阶数的错误重开设为 1）"));
 
         showDialog(act, "舒尔特方格", root, "保存", new Runnable() {
@@ -72,8 +78,9 @@ public final class ModuleSettings {
         });
     }
 
-    /** 无开关的功能项：左侧功能名，右侧固定「已启用」 */
-    private static View feature(Context c, String label) {
+    /** 无开关的功能项：左侧功能名（深色正文），右侧蓝色胶囊「已启用」 */
+    private static View feature(Activity act, String label) {
+        Context c = act;
         LinearLayout row = new LinearLayout(c);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -82,13 +89,20 @@ public final class ModuleSettings {
         TextView name = new TextView(c);
         name.setText(label);
         name.setTextSize(16);
+        name.setTextColor(SchulteModeDialog.dialogTextColor(act));
         row.addView(name, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView state = new TextView(c);
         state.setText("已启用");
-        state.setTextSize(13);
-        state.setAlpha(0.6f);
+        state.setTextSize(12);
+        state.setTextColor(ACCENT);
+        state.getPaint().setFakeBoldText(true);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(0x1A4C8DFF);
+        pill.setCornerRadius(Ui.dp(c, 10));
+        state.setBackground(pill);
+        state.setPadding(Ui.dp(c, 8), Ui.dp(c, 3), Ui.dp(c, 8), Ui.dp(c, 3));
         row.addView(state, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         return row;
@@ -97,14 +111,15 @@ public final class ModuleSettings {
     static void showAccount(final Activity act) {
         final Context c = act;
         LinearLayout root = vertical(c);
-        root.addView(hint(c, "当同一账号在另一台设备登录后，本机会回到登录页；开启后自动用保存的账号密码重登。"));
+        root.addView(hint(act, "当同一账号在另一台设备登录后，本机会回到登录页；开启后自动用保存的账号密码重登。"));
 
-        final CheckBox cbAuto = check(c, "多设备掉线自动重登（默认开启）", Prefs.autoRelogin(c));
+        final CheckBox cbAuto = check(act, "多设备掉线自动重登（默认开启）", Prefs.autoRelogin(c));
         root.addView(cbAuto);
 
         final String uid = Prefs.savedUid(c);
         final TextView info = new TextView(c);
         info.setText(uid.isEmpty() ? "当前未保存账号密码" : "已保存账号：" + mask(uid));
+        info.setTextColor(SchulteModeDialog.dialogTextColor(act));
         info.setPadding(0, Ui.dp(c, 8), 0, 0);
         root.addView(info);
 
@@ -135,7 +150,8 @@ public final class ModuleSettings {
         tv.setText("扫雷联萌增强 v" + MainHook.VERSION + "\n\n"
                 + "· 舒尔特功能：倒计时期间点击不直接开始（可关闭）、"
                 + "右上角阶数弹窗内直接切换模式与高级模式、倒计时时长下限取消（可设为 0）、重开预设\n"
-                + "· 高级模式：顺序 / 爆手速（可设目标 x）/ 倒序 / 归中 / max≤N / 1start，"
+                + "· 高级模式：顺序 / 爆手速（可设目标 x）/ 倒序 / 归中 / max≤N / 1start / "
+                + "顺序区间 / 倒序区间，"
                 + "成绩只在本地记录、不上传；每局结束有独立效果，可开启「非新纪录不展示成绩，自动下一把」\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
                 + "模式弹窗里「高级模式」右侧会显示 v" + MainHook.VERSION + " 与接管状态；\n"
@@ -145,6 +161,7 @@ public final class ModuleSettings {
                 + "使用方式：在 LSPosed 中启用模块，作用域勾选「扫雷联萌」，"
                 + "然后进入 App 的「设置」→「模块设置」。");
         tv.setTextSize(14);
+        tv.setTextColor(SchulteModeDialog.dialogTextColor(act));
         tv.setLineSpacing(0, 1.25f);
         root.addView(tv);
         new AlertDialog.Builder(act)
@@ -187,20 +204,22 @@ public final class ModuleSettings {
         return ll;
     }
 
-    private static CheckBox check(Context c, String text, boolean checked) {
-        CheckBox cb = new CheckBox(c);
+    private static CheckBox check(Activity act, String text, boolean checked) {
+        CheckBox cb = new CheckBox(act);
         cb.setText(text);
         cb.setChecked(checked);
-        cb.setPadding(0, Ui.dp(c, 6), 0, Ui.dp(c, 6));
+        cb.setTextColor(SchulteModeDialog.dialogTextColor(act));
+        cb.setPadding(0, Ui.dp(act, 6), 0, Ui.dp(act, 6));
         return cb;
     }
 
-    private static TextView hint(Context c, String text) {
-        TextView tv = new TextView(c);
+    /** 说明文字：不用灰色弱化，统一用弹窗正文的深色（深色主题下自动转浅） */
+    private static TextView hint(Activity act, String text) {
+        TextView tv = new TextView(act);
         tv.setText(text);
         tv.setTextSize(12);
-        tv.setAlpha(0.75f);
-        tv.setPadding(0, 0, 0, Ui.dp(c, 4));
+        tv.setTextColor(SchulteModeDialog.dialogTextColor(act));
+        tv.setPadding(0, 0, 0, Ui.dp(act, 4));
         return tv;
     }
 

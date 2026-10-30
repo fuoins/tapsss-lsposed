@@ -101,6 +101,8 @@ public final class AdvancedSchulte {
     private static volatile int chartCount;
     /** 区间模式的实际起点（成绩面板 / 曲线提示的序号按它算） */
     static volatile int chartStart = 1;
+    /** 正在构造本模块的高级模式成绩面板：只有这时才保留上面的曲线改写状态 */
+    private static volatile boolean buildingAdvDialog;
     private static volatile boolean chartHooked;
     private static volatile boolean chartAxisHooked;
     private static volatile boolean detailHooked;
@@ -252,10 +254,9 @@ public final class AdvancedSchulte {
                             if (param.args.length != 1 || param.args[0] != null) return;
                             Object view = param.thisObject;
                             XposedHelpers.removeAdditionalInstanceField(view, KEY_ROUND);
-                            // 新的一局开始：成绩面板的序号改写只对刚结束那一把有效
-                            chartMode = MODE_OFF;
-                            chartN = 0;
-                            chartCount = 0;
+                            // 注意：不要在这里清掉曲线改写状态。
+                            // 新的一局开始后，左下角「成绩」按钮仍会重新打开上一把的成绩面板，
+                            // 清掉会让区间/倒序模式的曲线序号退回 1..n²。
                             hideOverlay(Ui.findActivity(((View) view).getContext()));
                         } catch (Throwable ignored) {
                         }
@@ -347,6 +348,17 @@ public final class AdvancedSchulte {
                 try {
                     XposedBridge.hookAllMethods(dlgCls, "t", new XC_MethodHook() {
                         @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            // 官方成绩面板（不是本模块构造的）：清掉曲线改写状态，
+                            // 避免上一把高级模式的序号换算污染官方成绩图
+                            if (buildingAdvDialog) return;
+                            chartMode = MODE_OFF;
+                            chartN = 0;
+                            chartCount = 0;
+                            chartStart = 1;
+                        }
+
+                        @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
                                 fixChartXAxis(param);
@@ -416,17 +428,17 @@ public final class AdvancedSchulte {
         int mode = chartMode;
         int n = chartN;
         if (n <= 0) return;
-        if (mode == SPEED) {
-            // 爆手速：刻度值就是第几次点击，只保留落在真实点数范围内的整数刻度，
+        if (mode == SPEED || mode == RANGE || mode == RANGE_REV) {
+            // 爆手速 / 区间：刻度值就是第几次点击，只保留落在真实点数范围内的整数刻度，
             // 其余（默认图表在小数据量下产生的半刻度/越界刻度）留空
             float v = (param.args.length > 0 && param.args[0] instanceof Float)
                     ? (Float) param.args[0] : 0f;
             int k = Math.round(v) + 1;
             int count = Math.max(1, chartCount);
-            if (Math.abs(v - Math.round(v)) > 0.01f || k > count) {
+            if (Math.abs(v - Math.round(v)) > 0.01f || k > count || k < 1) {
                 param.setResult("");
             } else {
-                param.setResult(String.valueOf(Math.max(1, k)));
+                param.setResult(String.valueOf(numberAt(mode, n, k)));
             }
             return;
         }
@@ -443,7 +455,8 @@ public final class AdvancedSchulte {
      * 出现大量重复/无意义数字。这里按实际点数把 X 轴收敛到 1..count。
      */
     private static void fixChartXAxis(XC_MethodHook.MethodHookParam param) {
-        if (chartMode != SPEED) return;
+        int mode = chartMode;
+        if (mode != SPEED && mode != RANGE && mode != RANGE_REV) return;
         Object binding = XposedHelpers.getObjectField(param.thisObject, "b");
         if (binding == null) return;
         Object chart = XposedHelpers.getObjectField(binding, "R");
@@ -777,10 +790,9 @@ public final class AdvancedSchulte {
         if (r.hides) r.orig = snapshotCells(g);
         r.startAt = SystemClock.elapsedRealtime();
         r.lastCorrectAt = r.startAt;
-        // 新的一局开始：上一把成绩面板的序号改写不再生效
-        chartMode = MODE_OFF;
-        chartN = 0;
-        chartCount = 0;
+        // 注意：不要在这里清掉曲线改写状态。左下角「成绩」按钮会重新打开上一把的
+        // 成绩面板，提前清掉会让区间模式的曲线序号又回到 1..n²。
+        // 官方成绩面板在构造时（n4.o.t）会自行清空。
         XposedHelpers.setAdditionalInstanceField(view, KEY_ROUND, r);
 
         // 高级模式是在「当前官方模式」的基础上叠加出题顺序规则，
@@ -952,9 +964,16 @@ public final class AdvancedSchulte {
             chartN = r.n;
             chartCount = Math.max(1, r.x);
             chartStart = r.start;
-            Object dlg = XposedHelpers.newInstance(dlgCls,
-                    new Class<?>[]{record.getClass(), successCls, boolean.class},
-                    record, success, Boolean.FALSE);
+            Object dlg;
+            // 构造期间 t() 会被调用：标记一下，别让官方面板的清理逻辑把状态清掉
+            buildingAdvDialog = true;
+            try {
+                dlg = XposedHelpers.newInstance(dlgCls,
+                        new Class<?>[]{record.getClass(), successCls, boolean.class},
+                        record, success, Boolean.FALSE);
+            } finally {
+                buildingAdvDialog = false;
+            }
             // 标题改成「简单-顺序」这类高级模式标签（官方只认 type/blind，不会带高级模式信息）
             try {
                 Object binding = XposedHelpers.getObjectField(dlg, "b");
