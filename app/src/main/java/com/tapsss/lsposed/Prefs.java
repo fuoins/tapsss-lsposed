@@ -23,6 +23,12 @@ public final class Prefs {
     public static final String ADV_MAX_GAP_MS = "schulte_adv_max_gap_ms";
     /** 1start：自定义开局点 1 的反应上限（毫秒），0 = 用内置 450ms */
     public static final String ADV_START1_MS = "schulte_adv_start1_ms";
+    /** 顺序区间：起点 / 终点，0 = 默认 1 / n² */
+    public static final String ADV_RANGE_START = "schulte_adv_range_start";
+    public static final String ADV_RANGE_END = "schulte_adv_range_end";
+    /** 倒序区间：起点 / 终点，0 = 默认 n² / 1 */
+    public static final String ADV_RANGE_REV_START = "schulte_adv_range_rev_start";
+    public static final String ADV_RANGE_REV_END = "schulte_adv_range_rev_end";
     public static final String AUTO_NEXT_NO_RECORD = "schulte_auto_next_no_record";
 
     private static volatile SharedPreferences sp;
@@ -139,6 +145,50 @@ public final class Prefs {
     public static void setAdvStart1Ms(Context c, int ms) {
         SharedPreferences p = get(c);
         if (p != null) p.edit().putInt(ADV_START1_MS, Math.max(0, ms)).apply();
+    }
+
+    /** 顺序区间：起点（0 = 默认 1） */
+    public static int advRangeStart(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_RANGE_START, 0);
+    }
+
+    public static void setAdvRangeStart(Context c, int v) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_RANGE_START, Math.max(0, v)).apply();
+    }
+
+    /** 顺序区间：终点（0 = 默认 n²） */
+    public static int advRangeEnd(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_RANGE_END, 0);
+    }
+
+    public static void setAdvRangeEnd(Context c, int v) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_RANGE_END, Math.max(0, v)).apply();
+    }
+
+    /** 倒序区间：起点（0 = 默认 n²） */
+    public static int advRangeRevStart(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_RANGE_REV_START, 0);
+    }
+
+    public static void setAdvRangeRevStart(Context c, int v) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_RANGE_REV_START, Math.max(0, v)).apply();
+    }
+
+    /** 倒序区间：终点（0 = 默认 1） */
+    public static int advRangeRevEnd(Context c) {
+        SharedPreferences p = get(c);
+        return p == null ? 0 : p.getInt(ADV_RANGE_REV_END, 0);
+    }
+
+    public static void setAdvRangeRevEnd(Context c, int v) {
+        SharedPreferences p = get(c);
+        if (p != null) p.edit().putInt(ADV_RANGE_REV_END, Math.max(0, v)).apply();
     }
 
     /** 高级模式重开配置（adv key）是否已写过默认值 */

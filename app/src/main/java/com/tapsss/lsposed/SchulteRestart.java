@@ -424,7 +424,7 @@ public final class SchulteRestart {
 
     // ------------------------------------------------------------------ 预设
 
-    /** 预设列表：6 个高级模式各一条 + 全开 / 全关 */
+    /** 预设列表：8 个高级模式各一条 + 全开 / 全关 */
     private static void showPresets(final Activity act) {
         try {
             final int advCount = AdvancedSchulte.SHORT.length;
@@ -457,7 +457,7 @@ public final class SchulteRestart {
 
     /**
      * 单个预设：
-     * 0 = 顺序（官方 6 个模式 × 3~10 阶）；1..5 = 对应高级模式（所有阶数）。
+     * 0 = 顺序（官方 6 个模式 × 3~10 阶）；1..7 = 对应高级模式（所有阶数）。
      */
     private static void applyOnePreset(Activity act, int adv) {
         try {
@@ -528,10 +528,10 @@ public final class SchulteRestart {
     private static void confirmPreset(final Activity act, final boolean enable, final int count) {
         String action = enable
                 ? "会把官方所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
-                + "和 6 个高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start）"
+                + "和所有高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start / 顺序区间 / 倒序区间）"
                 + "的全部阶数（3×3 ~ 10×10）的「错误自动重开」都打开，并把错误数设为 1。"
                 : "会把官方所有模式（简单 / 简单盲玩 / 普通 / 盲玩 / 简单打乱 / 打乱）"
-                + "和 6 个高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start）"
+                + "和所有高级模式（顺序 / 爆手速 / 倒序 / 归中 / max≤N / 1start / 顺序区间 / 倒序区间）"
                 + "的全部阶数（3×3 ~ 10×10）的「错误自动重开」关闭，并把错误数设为 0。";
         try {
             new AlertDialog.Builder(act)
@@ -551,7 +551,7 @@ public final class SchulteRestart {
     }
 
     /**
-     * 一次写入官方配置 + 6 个高级模式的配置。
+     * 一次写入官方配置 + 所有高级模式的配置。
      * 官方开关回调 X(...) 的 key 是「type + 布尔」→ 0true / 0false，
      * 错误数的 key 是「type + 布尔 + level」→ 0true3；不能拼成 0/1，否则官方读不到。
      * 高级模式存在 adv<模式>_<level>，顺序模式即官方配置。
@@ -569,8 +569,8 @@ public final class SchulteRestart {
             overrideBase = null;
             try {
                 written = applyOfficial(act, flag, value);
-                // 6 个高级模式（0 = 顺序，即上面的官方配置；1..5 为叠加模式）
-                for (int adv = 1; adv <= 5 && adv < AdvancedSchulte.SHORT.length; adv++) {
+                // 8 个高级模式（0 = 顺序，即上面的官方配置；1..7 为叠加模式）
+                for (int adv = 1; adv < AdvancedSchulte.SHORT.length; adv++) {
                     writeAdv(act, adv, flag, value);
                 }
             } finally {
@@ -582,8 +582,8 @@ public final class SchulteRestart {
             syncSwitch(act, enable);
 
             String head = enable
-                    ? "已把官方所有模式 + 6 个高级模式全部打开「错误自动重开」，错误数 1"
-                    : "已把官方所有模式 + 6 个高级模式全部关闭「错误自动重开」，错误数 0";
+                    ? "已把官方所有模式 + 所有高级模式全部打开「错误自动重开」，错误数 1"
+                    : "已把官方所有模式 + 所有高级模式全部关闭「错误自动重开」，错误数 0";
             Ui.toast(act, written >= 8 ? head : head + "（官方校验 " + written + "/8）");
         } catch (Throwable t) {
             MainHook.log("应用重开预设失败: " + t);
@@ -621,7 +621,7 @@ public final class SchulteRestart {
                     XposedHelpers.callMethod(timeEnable, "setValue", base, null);
                 }
             }
-            for (int adv = 1; adv <= 5; adv++) {
+            for (int adv = 1; adv < AdvancedSchulte.SHORT.length; adv++) {
                 String key = "adv" + adv + "_";
                 // 旧版把高级模式的重开开关也写到了时间 KV 上，先搬回错误 KV 再删
                 try {

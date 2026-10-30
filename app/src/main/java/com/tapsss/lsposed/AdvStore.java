@@ -31,6 +31,9 @@ public final class AdvStore {
         public long time;
         public long reaction;
         public long ts;
+        /** 区间模式：本局起点 / 终点（其它模式 0） */
+        public int start;
+        public int end;
 
         /** 「简单-爆手速」这类标签，和成绩面板一致 */
         public String label() {
@@ -43,6 +46,14 @@ public final class AdvStore {
             return base + "-" + AdvancedSchulte.SHORT[mode];
         }
 
+        /** 区间模式的「起→终」后缀，其它模式为空 */
+        public String rangeText() {
+            if (start <= 0 || end <= 0) return "";
+            if (mode == AdvancedSchulte.RANGE) return " · " + start + "→" + end;
+            if (mode == AdvancedSchulte.RANGE_REV) return " · " + start + "→" + end;
+            return "";
+        }
+
         public String levelText() {
             return n + "×" + n;
         }
@@ -53,6 +64,12 @@ public final class AdvStore {
 
     public static synchronized void add(Context c, int mode, int type, boolean blind,
                                         int n, int x, long time, long reaction, int errors) {
+        add(c, mode, type, blind, n, x, time, reaction, errors, 0, 0);
+    }
+
+    public static synchronized void add(Context c, int mode, int type, boolean blind,
+                                        int n, int x, long time, long reaction, int errors,
+                                        int start, int end) {
         if (c == null || mode <= 0) return;
         try {
             SharedPreferences p = Prefs.get(c);
@@ -66,6 +83,9 @@ public final class AdvStore {
                     .append(',').append(Math.max(0L, reaction))
                     .append(',').append(errors)
                     .append(',').append(System.currentTimeMillis());
+            if (start > 0 || end > 0) {
+                sb.append(',').append(start).append(',').append(end);
+            }
             p.edit().putString(KEY, trim(sb.toString())).apply();
         } catch (Throwable ignored) {
         }
@@ -171,6 +191,10 @@ public final class AdvStore {
             r.reaction = Long.parseLong(p[6]);
             r.errors = Integer.parseInt(p[7]);
             r.ts = Long.parseLong(p[8]);
+            if (p.length >= 11) {
+                r.start = Integer.parseInt(p[9]);
+                r.end = Integer.parseInt(p[10]);
+            }
             return r.mode > 0 && r.n > 0 ? r : null;
         } catch (Throwable t) {
             return null;
