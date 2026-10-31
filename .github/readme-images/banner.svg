@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="扫雷联萌增强 · LSPosed 模块">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.9">
+      <stop offset="0" stop-color="#080D17"/>
+      <stop offset="0.55" stop-color="#0E1726"/>
+      <stop offset="1" stop-color="#13203A"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1.4" cy="1.4" r="1.4" fill="#2A3A55" fill-opacity="0.7"/>
+    </pattern>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.5" stop-color="#0EA5E9" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#0EA5E9" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect width="1280" height="320" fill="url(#dots)"/>
+  <ellipse cx="1040" cy="160" rx="380" ry="250" fill="url(#glow)"/>
+  <rect x="0" y="0" width="1280" height="2" fill="url(#rule)"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <text x="72" y="88" font-size="13" font-weight="600" letter-spacing="4.5" fill="#22D3EE">LSPOSED  ·  ANDROID MODULE</text>
+
+    <text x="70" y="162" font-size="58" font-weight="700" fill="#F8FAFC" letter-spacing="1">扫雷联萌增强</text>
+
+    <text x="72" y="206" font-size="21" fill="#94A3B8">舒尔特方格 · 2048 · 多设备自动重登</text>
+
+    <g>
+      <rect x="72" y="240" width="146" height="36" rx="18" fill="#22D3EE" fill-opacity="0.12" stroke="#22D3EE" stroke-opacity="0.38"/>
+      <text x="145" y="263" font-size="15" font-weight="600" fill="#67E8F9" text-anchor="middle">8 种训练模式</text>
+
+      <rect x="232" y="240" width="164" height="36" rx="18" fill="#F59E0B" fill-opacity="0.10" stroke="#F59E0B" stroke-opacity="0.30"/>
+      <text x="314" y="263" font-size="15" font-weight="600" fill="#FCD34D" text-anchor="middle">适配 3.6.10</text>
+    </g>
+  </g>
+
+  <g>
+  <rect x="922" y="25" width="54" height="54" rx="14" fill="url(#cyan)" fill-opacity="1.0" stroke="none"/>
+  <rect x="994" y="25" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1066" y="25" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1138" y="25" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="922" y="97" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="994" y="97" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1066" y="97" width="54" height="54" rx="14" fill="url(#amber)" fill-opacity="1.0" stroke="none"/>
+  <rect x="1138" y="97" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="922" y="169" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="994" y="169" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1066" y="169" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1138" y="169" width="54" height="54" rx="14" fill="url(#cyan)" fill-opacity="0.45" stroke="none"/>
+  <rect x="922" y="241" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="994" y="241" width="54" height="54" rx="14" fill="none" fill-opacity="1.0" stroke="#22D3EE" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1066" y="241" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  <rect x="1138" y="241" width="54" height="54" rx="14" fill="#16233A" fill-opacity="1.0" stroke="#22314A" stroke-width="1.5" stroke-opacity="0.45"/>
+  </g>
+</svg>
