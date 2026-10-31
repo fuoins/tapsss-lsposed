@@ -15,7 +15,7 @@ public class MainHook implements IXposedHookLoadPackage {
     /** 共存版只改了包名（dex 类名不变），按前缀同样接管 */
     private static final String PKG_PREFIX = "com.star.minesweep";
     /** 与 build.gradle 的 versionName 保持一致，显示在模式弹窗里 */
-    public static final String VERSION = "1.0.31";
+    public static final String VERSION = "1.0.32";
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -47,6 +47,11 @@ public class MainHook implements IXposedHookLoadPackage {
             LoginHooks.install(lpparam.classLoader);
         } catch (Throwable t) {
             log("LoginHooks 安装失败: " + t);
+        }
+        try {
+            TZFEHooks.install(lpparam.classLoader);
+        } catch (Throwable t) {
+            log("TZFEHooks 安装失败: " + t);
         }
     }
 
