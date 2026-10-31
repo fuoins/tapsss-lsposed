@@ -24,7 +24,8 @@ public final class ModuleSettings {
 
     public static void show(final Activity act) {
         if (!Ui.isAlive(act)) return;
-        final String[] items = {"舒尔特方格", "账号与登录（多设备掉线自动重登）", "关于"};
+        final String[] items = {
+                "舒尔特方格", "2048", "账号与登录（多设备掉线自动重登）", "关于"};
         try {
             new AlertDialog.Builder(act)
                     .setTitle("扫雷联萌增强")
@@ -32,7 +33,8 @@ public final class ModuleSettings {
                         @Override
                         public void onClick(DialogInterface dialog, int which) {
                             if (which == 0) showSchulte(act);
-                            else if (which == 1) showAccount(act);
+                            else if (which == 1) showTZFE(act);
+                            else if (which == 2) showAccount(act);
                             else showAbout(act);
                         }
                     })
@@ -76,6 +78,37 @@ public final class ModuleSettings {
                 Ui.toast(c, "已保存");
             }
         });
+    }
+
+    static void showTZFE(final Activity act) {
+        final Context c = act;
+        LinearLayout root = vertical(c);
+        root.addView(hint(act, "以下功能在 2048 中默认生效，无需额外开关；App 原有设置保持不变"));
+
+        root.addView(feature(act, "棋盘 3×3 – 10×10，目标分数 = 2^(3×短边−1)"));
+        root.addView(feature(act, "自定义棋盘：行、列均可选 3–10"));
+        root.addView(feature(act, "对局内「撤销」：回退上一步，本局成绩不上传"));
+        root.addView(feature(act, "成绩面板按新棋盘尺寸适配"));
+        root.addView(feature(act, "排行榜：尺寸主标签 + 时间/分数子标签"));
+        root.addView(hint(act, "目标分数示例：3×3=256，4×4=2048，5×5=16384，"
+                + "之后每增加一阶 ×8，10×10=536870912"));
+        root.addView(hint(act, "难度弹窗底部的「2048设置」可打开官方 2048 设置页（倒计时、音效等）"));
+
+        Button open = new Button(c);
+        open.setText("打开官方 2048 设置");
+        open.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                TZFEHooks.openOfficialSetting(act);
+            }
+        });
+        root.addView(open);
+
+        new AlertDialog.Builder(act)
+                .setTitle("2048")
+                .setView(wrap(act, root))
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     /** 无开关的功能项：左侧功能名（深色正文），右侧蓝色胶囊「已启用」 */
@@ -153,6 +186,8 @@ public final class ModuleSettings {
                 + "· 高级模式：顺序 / 爆手速（可设目标 x）/ 倒序 / 归中 / max≤N / 1start / "
                 + "顺序区间 / 倒序区间，"
                 + "成绩只在本地记录、不上传；每局结束有独立效果，可开启「非新纪录不展示成绩，自动下一把」\n"
+                + "· 2048：棋盘 3×3 – 10×10 与自定义 (3–10)×(3–10)，目标分数 = 2^(3×短边−1)；"
+                + "对局内可「撤销」，用过撤销的这局成绩不上传；排行榜按尺寸分组展示\n"
                 + "· 账号：多设备登录掉线后自动重登（默认开启）\n\n"
                 + "模式弹窗里「高级模式」右侧会显示 v" + MainHook.VERSION + " 与接管状态；\n"
                 + "若显示「未接管」，请在 LSPosed 里确认作用域勾选「扫雷联萌」，"

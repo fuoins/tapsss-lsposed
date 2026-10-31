@@ -511,8 +511,10 @@ public final class SchulteModeDialog {
                     }
                 }
             });
-            footer.addView(schulteSetting, new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            LinearLayout.LayoutParams schulteLp = new LinearLayout.LayoutParams(
+                    0, Ui.dp(act, 38), 1f);
+            schulteLp.setMargins(Ui.dp(act, 4), 0, Ui.dp(act, 4), 0);
+            footer.addView(schulteSetting, schulteLp);
 
             TextView moduleSetting = textButton(act, "模块设置");
             moduleSetting.setOnClickListener(new View.OnClickListener() {
@@ -522,8 +524,10 @@ public final class SchulteModeDialog {
                     ModuleSettings.show(act);
                 }
             });
-            footer.addView(moduleSetting, new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            LinearLayout.LayoutParams moduleLp = new LinearLayout.LayoutParams(
+                    0, Ui.dp(act, 38), 1f);
+            moduleLp.setMargins(Ui.dp(act, 4), 0, Ui.dp(act, 4), 0);
+            footer.addView(moduleSetting, moduleLp);
 
             // ------------------------------------------------ 最底部「确认」
             // 区间模式的起点/终点是边输入边存的，这里记一份打开弹窗时的值，
@@ -782,8 +786,14 @@ public final class SchulteModeDialog {
         tv.setText(text);
         tv.setTextSize(14);
         tv.setTextColor(LINK_COLOR);
+        tv.getPaint().setFakeBoldText(true);
         tv.setGravity(Gravity.CENTER);
-        tv.setPadding(0, Ui.dp(act, 9), 0, Ui.dp(act, 9));
+        tv.setPadding(Ui.dp(act, 14), Ui.dp(act, 9), Ui.dp(act, 14), Ui.dp(act, 9));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0x1A4C8DFF);
+        bg.setCornerRadius(Ui.dp(act, 19));
+        bg.setStroke(Ui.dp(act, 1), 0x554C8DFF);
+        tv.setBackground(bg);
         tv.setClickable(true);
         return tv;
     }
