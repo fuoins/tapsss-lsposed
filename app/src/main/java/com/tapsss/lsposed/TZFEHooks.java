@@ -50,6 +50,7 @@ public final class TZFEHooks {
     private static final String CLS_HELPER = "com.star.minesweeping.i.c.f.a";
     private static final String CLS_LEVEL_DIALOG = "com.star.minesweeping.k.b.p4.l";
     private static final String CLS_RESULT_DIALOG = "com.star.minesweeping.k.b.p4.m";
+    private static final String CLS_RESULT_BASE = "com.star.minesweeping.k.b.f4.e";
     private static final String CLS_SAVE =
             "com.star.minesweeping.data.bean.game.other.TZFESave";
     private static final String CLS_RECORD =
@@ -67,6 +68,11 @@ public final class TZFEHooks {
     private static final String KEY_UNDO_BTN = "tapsss_tzfe_undo_btn";
     private static final String KEY_UNDO_STACK = "tapsss_tzfe_undo_stack";
     private static final String KEY_RANK_CHIPS = "tapsss_tzfe_rank_chips";
+    private static final String KEY_FROM_SETTINGS = "tapsss_tzfe_from_settings";
+    private static final String KEY_RELOAD_POSTED = "tapsss_tzfe_reload_posted";
+    /** 进程被杀后「本局不上传」也要活下来，跟存档一起跨启动 */
+    private static final String SP_NAME = "tapsss_tzfe_state";
+    private static final String SP_NO_UPLOAD = "no_upload";
 
     private static final int ACCENT = 0xFF4C8DFF;
     private static final int[] SIZES = {3, 4, 5, 6, 7, 8, 9, 10};
@@ -74,6 +80,13 @@ public final class TZFEHooks {
     /** 当前正在显示的 2048 游戏页（难度弹窗需要读 Activity.j 的真实尺寸） */
     private static volatile WeakReference<Activity> current =
             new WeakReference<>(null);
+
+    /**
+     * 本局用过撤销。放在静态字段里而不是 Activity 上：
+     * 从 2048 设置返回会整页重建、退出后重进会从存档恢复，Activity 附加字段都会丢，
+     * 只要这局棋还没真正重开（d0 读到空存档 / 切换尺寸），就一直保持「不上传」。
+     */
+    private static volatile boolean sessionNoUpload;
 
     /** 一次调用链内的上下文：修正 w0 的数组越界、目标分数与上传开关 */
     private static final ThreadLocal<Ctx> CTX = new ThreadLocal<>();
@@ -105,30 +118,20 @@ public final class TZFEHooks {
     }
 
     static void install(ClassLoader cl) {
+        guard("棋盘", () -> installGame(cl));
+        guard("游戏页", () -> installActivity(cl));
+        guard("存档", () -> installSaves(cl));
+        guard("弹窗", () -> installDialogs(cl));
+        guard("设置页", () -> installSetting(cl));
+        guard("排行榜", () -> installRank(cl));
+    }
+
+    /** 每个 Hook 单独兜底：任何一个失败都不能拖累后面的（尤其是不上传开关） */
+    private static void guard(String what, Runnable action) {
         try {
-            installGame(cl);
+            action.run();
         } catch (Throwable t) {
-            MainHook.log("TZFE 棋盘 Hook 失败: " + t);
-        }
-        try {
-            installActivity(cl);
-        } catch (Throwable t) {
-            MainHook.log("TZFE 游戏页 Hook 失败: " + t);
-        }
-        try {
-            installSaves(cl);
-        } catch (Throwable t) {
-            MainHook.log("TZFE 存档 Hook 失败: " + t);
-        }
-        try {
-            installDialogs(cl);
-        } catch (Throwable t) {
-            MainHook.log("TZFE 弹窗 Hook 失败: " + t);
-        }
-        try {
-            installRank(cl);
-        } catch (Throwable t) {
-            MainHook.log("TZFE 排行榜 Hook 失败: " + t);
+            MainHook.log("TZFE " + what + " Hook 失败: " + t);
         }
     }
 
@@ -138,63 +141,67 @@ public final class TZFEHooks {
         Class<?> gameCls = XposedHelpers.findClass(CLS_GAME, cl);
 
         // 自定义尺寸编码：code = row*100+col（>=300）。方形 3..10 直接传 n。
-        XposedHelpers.findAndHookMethod(gameCls, "x", int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                int code = (Integer) param.args[0];
-                if (code >= 300) param.args[0] = code / 100;
-            }
-        });
-        XposedHelpers.findAndHookMethod(gameCls, "t", int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                int code = (Integer) param.args[0];
-                if (code >= 300) param.args[0] = code % 100;
-            }
-        });
+        guard("x(int)", () -> XposedHelpers.findAndHookMethod(gameCls, "x", int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        int code = (Integer) param.args[0];
+                        if (code >= 300) param.args[0] = code / 100;
+                    }
+                }));
+        guard("t(int)", () -> XposedHelpers.findAndHookMethod(gameCls, "t", int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        int code = (Integer) param.args[0];
+                        if (code >= 300) param.args[0] = code % 100;
+                    }
+                }));
 
         // 新开/恢复棋局时目标分数按短边重算
-        XposedBridge.hookAllMethods(gameCls, "r", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args.length != 2 || !(param.args[1] instanceof Long)) return;
-                Object game = param.thisObject;
-                int row = (Integer) XposedHelpers.callMethod(game, "g");
-                int col = (Integer) XposedHelpers.callMethod(game, "c");
-                if (row < 3 || col < 3) return;
-                Ctx prev = CTX.get();
-                Ctx c = new Ctx();
-                c.row = row;
-                c.col = col;
-                c.target = targetOf(Math.min(row, col));
-                c.clamp = false;
-                param.setObjectExtra("prev", prev);
-                param.setObjectExtra("applied", Boolean.TRUE);
-                CTX.set(c);
-            }
+        guard("r(cells,score)", () -> XposedBridge.hookAllMethods(gameCls, "r",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (param.args.length != 2 || !(param.args[1] instanceof Long)) return;
+                        Object game = param.thisObject;
+                        int row = (Integer) XposedHelpers.callMethod(game, "g");
+                        int col = (Integer) XposedHelpers.callMethod(game, "c");
+                        if (row < 3 || col < 3) return;
+                        Ctx prev = CTX.get();
+                        Ctx c = new Ctx();
+                        c.row = row;
+                        c.col = col;
+                        c.target = targetOf(Math.min(row, col));
+                        c.clamp = false;
+                        param.setObjectExtra("prev", prev);
+                        param.setObjectExtra("applied", Boolean.TRUE);
+                        CTX.set(c);
+                    }
 
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                // 只有 before 真的改过上下文才恢复，避免把外层的 ctx 清掉
-                if (param.getObjectExtra("applied") == null) return;
-                CTX.set((Ctx) param.getObjectExtra("prev"));
-            }
-        });
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        // 只有 before 真的改过上下文才恢复，避免把外层的 ctx 清掉
+                        if (param.getObjectExtra("applied") == null) return;
+                        CTX.set((Ctx) param.getObjectExtra("prev"));
+                    }
+                }));
 
         // w0 里按 g()-3 取数组，row>5 会越界：只在 w0 期间夹到 5
-        XposedHelpers.findAndHookMethod(gameCls, "g", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                Ctx c = CTX.get();
-                if (c != null && c.clamp) {
-                    param.setResult(Math.min(c.row, 5));
-                }
-            }
-        });
+        guard("g()", () -> XposedHelpers.findAndHookMethod(gameCls, "g",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Ctx c = CTX.get();
+                        if (c != null && c.clamp) {
+                            param.setResult(Math.min(c.row, 5));
+                        }
+                    }
+                }));
 
         // 目标分数：ctx 优先；否则 3..10 → 3n−1
-        XposedHelpers.findAndHookMethod(CLS_UTIL, cl, "b", int.class,
-                new XC_MethodHook() {
+        guard("TZFEUtil.b(int)", () -> XposedHelpers.findAndHookMethod(CLS_UTIL, cl,
+                "b", int.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Ctx c = CTX.get();
@@ -205,11 +212,11 @@ public final class TZFEHooks {
                         int size = (Integer) param.args[0];
                         if (size >= 3 && size <= 10) param.setResult(3 * size - 1);
                     }
-                });
+                }));
 
         // 上传接口的 row/column 用的是被夹过的 g()，这里改回真实值
-        XposedHelpers.findAndHookMethod(CLS_API, cl, "j", int.class, String.class,
-                int.class, int.class, long.class, long.class, int.class,
+        guard("api.j", () -> XposedHelpers.findAndHookMethod(CLS_API, cl, "j", int.class,
+                String.class, int.class, int.class, long.class, long.class, int.class,
                 String.class, long.class, String.class, String.class,
                 new XC_MethodHook() {
                     @Override
@@ -219,11 +226,11 @@ public final class TZFEHooks {
                         param.args[2] = c.row;
                         param.args[3] = c.col;
                     }
-                });
+                }));
 
         // TZFERecord 也走被夹过的 g()，恢复真实行
-        XposedHelpers.findAndHookMethod(CLS_RECORD, cl, "setRow", int.class,
-                new XC_MethodHook() {
+        guard("TZFERecord.setRow", () -> XposedHelpers.findAndHookMethod(CLS_RECORD, cl,
+                "setRow", int.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         Ctx c = CTX.get();
@@ -231,16 +238,20 @@ public final class TZFEHooks {
                         XposedHelpers.setIntField(param.thisObject, "row", c.row);
                         param.setResult(null);
                     }
-                });
+                }));
 
         // 撤销过的这局：强制走本地成绩分支，不上传
-        XposedHelpers.findAndHookMethod(CLS_LOGIN, cl, "e", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                Ctx c = CTX.get();
-                if (c != null && c.noUpload) param.setResult(Boolean.FALSE);
-            }
-        });
+        guard("登录态 e()", () -> XposedHelpers.findAndHookMethod(CLS_LOGIN, cl, "e",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Ctx c = CTX.get();
+                        if (c != null && c.noUpload) {
+                            MainHook.log("TZFE 本局用过撤销，跳过上传");
+                            param.setResult(Boolean.FALSE);
+                        }
+                    }
+                }));
     }
 
     // ------------------------------------------------------------------ 游戏页/撤销
@@ -253,53 +264,80 @@ public final class TZFEHooks {
         Class<?> cellCls = XposedHelpers.findClass(CLS_CELL, cl);
 
         // 每次落子前保存快照，落子后若棋盘真的变了才入撤销栈
-        XposedBridge.hookAllMethods(viewCls, "a", new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                if (param.args.length != 1 || !(param.args[0] instanceof Integer)) return;
-                Object view = param.thisObject;
-                Object game = XposedHelpers.callMethod(view, "getGame");
-                Snap snap = capture(cellCls, game);
-                if (snap != null) param.setObjectExtra("snap", snap);
-            }
+        guard("TZFEView.a(I)", () -> XposedBridge.hookAllMethods(viewCls, "a",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (param.args.length != 1 || !(param.args[0] instanceof Integer)) return;
+                        Object view = param.thisObject;
+                        Object game = XposedHelpers.callMethod(view, "getGame");
+                        Snap snap = capture(cellCls, game);
+                        if (snap != null) param.setObjectExtra("snap", snap);
+                    }
 
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                Object extra = param.getObjectExtra("snap");
-                if (!(extra instanceof Snap)) return;
-                Object view = param.thisObject;
-                Object game = XposedHelpers.callMethod(view, "getGame");
-                Snap before = (Snap) extra;
-                Object nowCells = cellsOf(game);
-                if (sameGrid(cellCls, before.cells, nowCells)) return;
-                List<Snap> stack = stackOf(view);
-                if (stack == null) {
-                    stack = new ArrayList<>();
-                    XposedHelpers.setAdditionalInstanceField(view, KEY_UNDO_STACK, stack);
-                }
-                if (stack.size() >= 200) stack.remove(0);
-                stack.add(before);
-                Activity act = activityOf((View) view);
-                if (act != null) refreshUndo(act);
-            }
-        });
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Object extra = param.getObjectExtra("snap");
+                        if (!(extra instanceof Snap)) return;
+                        Object view = param.thisObject;
+                        Object game = XposedHelpers.callMethod(view, "getGame");
+                        Snap before = (Snap) extra;
+                        Object nowCells = cellsOf(game);
+                        if (sameGrid(cellCls, before.cells, nowCells)) return;
+                        List<Snap> stack = stackOf(view);
+                        if (stack == null) {
+                            stack = new ArrayList<>();
+                            XposedHelpers.setAdditionalInstanceField(view, KEY_UNDO_STACK, stack);
+                        }
+                        if (stack.size() >= 200) stack.remove(0);
+                        stack.add(before);
+                        Activity act = activityOf((View) view);
+                        if (act != null) refreshUndo(act);
+                    }
+                }));
 
-        // 新开一局 / 恢复存档 → 清空撤销栈与「不上传」标记
-        XposedHelpers.findAndHookMethod(actCls, "s0", new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                clearUndo((Activity) param.thisObject);
-            }
-        });
-        XposedHelpers.findAndHookMethod(actCls, "d0", saveCls, new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                clearUndo((Activity) param.thisObject);
-            }
-        });
+        // 新开一局 → 清空撤销栈；同时重开意味着上一局已结束，不上传标记也一起清
+        guard("s0()", () -> XposedHelpers.findAndHookMethod(actCls, "s0",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        clearUndo((Activity) param.thisObject);
+                    }
+                }));
+
+        // 恢复存档：读到空存档说明是真正的新局，这时才清除「不上传」；
+        // 读到有效存档说明这一局还在继续（退出重进 / 设置返回重建），标记必须保留
+        guard("d0(save)", () -> XposedHelpers.findAndHookMethod(actCls, "d0", saveCls,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Activity act = (Activity) param.thisObject;
+                        clearUndo(act);
+                        try {
+                            Object save = param.args[0];
+                            int row = (Integer) XposedHelpers.callMethod(save, "getRow");
+                            if (row <= 0) {
+                                // 没有存档 = 这局真的结束了/没保存，标记作废
+                                sessionNoUpload = false;
+                                setPersistNoUpload(act, false);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }));
+
+        // 切换棋盘尺寸 = 开新局，撤销标记失效
+        guard("l0(int)", () -> XposedHelpers.findAndHookMethod(actCls, "l0", int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        sessionNoUpload = false;
+                        setPersistNoUpload((Activity) param.thisObject, false);
+                    }
+                }));
 
         // 结算（含达到目标时）：修正 w0 的数组下标、目标分数与上传
-        XposedHelpers.findAndHookMethod(actCls, "w0",
+        guard("w0", () -> XposedHelpers.findAndHookMethod(actCls, "w0",
                 long.class, int.class, boolean.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
@@ -311,7 +349,8 @@ public final class TZFEHooks {
                         c.col = (Integer) XposedHelpers.callMethod(game, "c");
                         c.target = targetOf(Math.min(c.row, c.col));
                         c.clamp = true;
-                        c.noUpload = getAdd(act, KEY_NO_UPLOAD) != null;
+                        c.noUpload = sessionNoUpload
+                                || getAdd(act, KEY_NO_UPLOAD) != null;
                         param.setObjectExtra("prev", prev);
                         param.setObjectExtra("ctx", c);
                         CTX.set(c);
@@ -322,26 +361,104 @@ public final class TZFEHooks {
                         if (param.getObjectExtra("ctx") == null) return;
                         CTX.set((Ctx) param.getObjectExtra("prev"));
                     }
-                });
+                }));
 
-        XposedHelpers.findAndHookMethod(actCls, "init", new XC_MethodHook() {
+        guard("init", () -> XposedHelpers.findAndHookMethod(actCls, "init",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Activity act = (Activity) param.thisObject;
+                        current = new WeakReference<>(act);
+                        // 进程重启后先看持久化标记：这局是从「用过撤销」的存档恢复的
+                        if (getPersistNoUpload(act)) sessionNoUpload = true;
+                        clearUndo(act);
+                        addUndoButton(act);
+                    }
+                }));
+
+        guard("onDestroy", () -> XposedHelpers.findAndHookMethod(actCls, "onDestroy",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Activity act = (Activity) param.thisObject;
+                        Activity shown = current.get();
+                        if (shown == act) current = new WeakReference<>(null);
+                    }
+                }));
+
+        // 从「2048 设置」返回：整页重建，让显示/触控/摇杆等设置立即生效
+        final XC_MethodHook reload = new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
-                Activity act = (Activity) param.thisObject;
-                current = new WeakReference<>(act);
-                clearUndo(act);
-                addUndoButton(act);
+                Object self = param.thisObject;
+                if (!CLS_ACT.equals(self.getClass().getName())) return;
+                Activity act = (Activity) self;
+                if (getAdd(act, KEY_FROM_SETTINGS) == null) return;
+                XposedHelpers.removeAdditionalInstanceField(act, KEY_FROM_SETTINGS);
+                reloadFromSettings(act);
             }
-        });
+        };
+        for (Class<?> c = actCls; c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                XposedHelpers.findAndHookMethod(c, "onResume", reload);
+                break;
+            } catch (Throwable ignored) {
+            }
+        }
+    }
 
-        XposedHelpers.findAndHookMethod(actCls, "onDestroy", new XC_MethodHook() {
+    /** 重建前先把当前棋局写进官方存档，重建后由 s0 → r0 → d0 自动恢复 */
+    private static void reloadFromSettings(final Activity act) {
+        if (getAdd(act, KEY_RELOAD_POSTED) != null) return;
+        XposedHelpers.setAdditionalInstanceField(act, KEY_RELOAD_POSTED, Boolean.TRUE);
+        syncLevelExtra(act);
+        boolean saved = true;
+        try {
+            Object gaming = XposedHelpers.callMethod(act, "isGaming");
+            if (Boolean.TRUE.equals(gaming)) {
+                // h0 与退出时的自动存档同一个实现（g0），但不弹「存档成功」
+                Object ok = XposedHelpers.callMethod(act, "h0");
+                saved = Boolean.TRUE.equals(ok);
+            }
+        } catch (Throwable t) {
+            saved = false;
+            MainHook.log("重建前保存 2048 棋局失败: " + t);
+        }
+        if (!saved) {
+            // 存档没写成时不能重建，否则这局棋就丢了
+            XposedHelpers.removeAdditionalInstanceField(act, KEY_RELOAD_POSTED);
+            Ui.toast(act, "保存棋局失败，设置将在本局结束后生效");
+            return;
+        }
+        MainHook.log("从 2048 设置返回，整页重建");
+        Ui.post(new Runnable() {
             @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                Activity act = (Activity) param.thisObject;
-                Activity shown = current.get();
-                if (shown == act) current = new WeakReference<>(null);
+            public void run() {
+                try {
+                    if (Ui.isAlive(act)) act.recreate();
+                } catch (Throwable t) {
+                    MainHook.log("2048 整页重建失败: " + t);
+                }
             }
         });
+    }
+
+    /**
+     * recreate 会复用原 Intent，而 ARouter 的 level 是从 Intent 里注入的：
+     * 不写回当前尺寸的话，从排行榜按旧尺寸进来、中途换过尺寸时重建会读错存档。
+     */
+    private static void syncLevelExtra(Activity act) {
+        try {
+            Object game = XposedHelpers.getObjectField(act, "b");
+            if (game == null) return;
+            int row = (Integer) XposedHelpers.callMethod(game, "g");
+            int col = (Integer) XposedHelpers.callMethod(game, "c");
+            if (row < 3 || row > 10 || col < 3 || col > 10) return;
+            Intent it = act.getIntent();
+            if (it != null) it.putExtra("level", row == col ? row : row * 100 + col);
+        } catch (Throwable t) {
+            MainHook.log("2048 重建前同步棋盘尺寸失败: " + t);
+        }
     }
 
     private static void addUndoButton(final Activity act) {
@@ -409,16 +526,20 @@ public final class TZFEHooks {
             }
             Snap snap = stack.remove(stack.size() - 1);
 
+            // 先打「不上传」标记再改棋盘：后续任何一步抛异常，这局也不会被当作正常成绩
+            boolean first = !sessionNoUpload;
+            sessionNoUpload = true;
+            XposedHelpers.setAdditionalInstanceField(act, KEY_NO_UPLOAD, Boolean.TRUE);
+            setPersistNoUpload(act, true);
+            if (first) {
+                Ui.toast(act, "已撤销，本局成绩将不上传");
+            }
+
             XposedHelpers.callMethod(view, "n", snap.cells, snap.seed,
                     snap.seedCount, snap.score);
             Object info = XposedHelpers.getObjectField(act, "a");
             if (info != null) {
                 XposedHelpers.callMethod(info, "setScore", snap.score);
-            }
-            boolean first = getAdd(act, KEY_NO_UPLOAD) == null;
-            XposedHelpers.setAdditionalInstanceField(act, KEY_NO_UPLOAD, Boolean.TRUE);
-            if (first) {
-                Ui.toast(act, "已撤销，本局成绩将不上传");
             }
             // 撤回后恢复到可继续游戏的状态
             Object in = XposedHelpers.getObjectField(binding, "U");
@@ -638,6 +759,47 @@ public final class TZFEHooks {
         } catch (Throwable t) {
             MainHook.log("成绩弹窗 Hook 失败: " + t);
         }
+
+        // 用过撤销的这局：成绩弹窗不显示登录入口（l()），也不接受登录后的二次上传（k(Runnable)）
+        try {
+            XposedHelpers.findAndHookMethod(CLS_RESULT_BASE, cl, "l",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (noUploadNow()) param.setResult(null);
+                        }
+                    });
+            XposedHelpers.findAndHookMethod(CLS_RESULT_BASE, cl, "k", Runnable.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (noUploadNow()) param.setResult(null);
+                        }
+                    });
+        } catch (Throwable t) {
+            MainHook.log("成绩弹窗登录入口 Hook 失败: " + t);
+        }
+    }
+
+    /** 最近一次结算/成绩弹窗回调是否发生在「本局用过撤销」的上下文里 */
+    private static boolean noUploadNow() {
+        Ctx c = CTX.get();
+        return c != null && c.noUpload;
+    }
+
+    /** 官方 2048 设置页 → 给游戏页打标记，返回时整页重建以立即生效 */
+    private static void installSetting(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod(CLS_SETTING_TZFE, cl, "init",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Activity game = current.get();
+                        if (game == null || !Ui.isAlive(game)) return;
+                        if (!CLS_ACT.equals(game.getClass().getName())) return;
+                        XposedHelpers.setAdditionalInstanceField(
+                                game, KEY_FROM_SETTINGS, Boolean.TRUE);
+                    }
+                });
     }
 
     private static void decorateLevelDialog(Object dlg, int argLevel) {
@@ -764,14 +926,7 @@ public final class TZFEHooks {
             @Override
             public void onClick(View v) {
                 ((Dialog) dlg).dismiss();
-                try {
-                    Intent it = new Intent();
-                    it.setClassName(act, CLS_SETTING_TZFE);
-                    act.startActivity(it);
-                } catch (Throwable t) {
-                    MainHook.log("打开 2048 设置失败: " + t);
-                    Ui.toast(act, "打开 2048 设置失败");
-                }
+                openOfficialSetting(act);
             }
         });
         LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(
@@ -1198,13 +1353,40 @@ public final class TZFEHooks {
         }
     }
 
+    private static void setPersistNoUpload(Activity act, boolean on) {
+        try {
+            act.getApplicationContext().getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
+                    .edit().putBoolean(SP_NO_UPLOAD, on).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static boolean getPersistNoUpload(Activity act) {
+        try {
+            return act.getApplicationContext().getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(SP_NO_UPLOAD, false);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** 模块设置页打开官方 2048 设置 */
     static void openOfficialSetting(Activity act) {
+        boolean mark = CLS_ACT.equals(act.getClass().getName());
+        if (mark) {
+            XposedHelpers.setAdditionalInstanceField(act, KEY_FROM_SETTINGS, Boolean.TRUE);
+        }
         try {
             Intent it = new Intent();
             it.setClassName(act, CLS_SETTING_TZFE);
             act.startActivity(it);
         } catch (Throwable t) {
+            if (mark) {
+                try {
+                    XposedHelpers.removeAdditionalInstanceField(act, KEY_FROM_SETTINGS);
+                } catch (Throwable ignored) {
+                }
+            }
             Ui.toast(act, "打开 2048 设置失败");
         }
     }
