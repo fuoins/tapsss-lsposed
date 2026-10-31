@@ -24,7 +24,9 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -70,9 +72,9 @@ public final class TZFEHooks {
     private static final String KEY_RANK_CHIPS = "tapsss_tzfe_rank_chips";
     private static final String KEY_FROM_SETTINGS = "tapsss_tzfe_from_settings";
     private static final String KEY_RELOAD_POSTED = "tapsss_tzfe_reload_posted";
-    /** 进程被杀后「本局不上传」也要活下来，跟存档一起跨启动 */
+    /** 进程被杀后「本局不上传」也要活下来；按棋盘尺寸分档保存，每个尺寸各有一份存档 */
     private static final String SP_NAME = "tapsss_tzfe_state";
-    private static final String SP_NO_UPLOAD = "no_upload";
+    private static final String SP_NO_UPLOAD_LEVELS = "no_upload_levels";
 
     private static final int ACCENT = 0xFF4C8DFF;
     private static final int[] SIZES = {3, 4, 5, 6, 7, 8, 9, 10};
@@ -305,8 +307,8 @@ public final class TZFEHooks {
                     }
                 }));
 
-        // 恢复存档：读到空存档说明是真正的新局，这时才清除「不上传」；
-        // 读到有效存档说明这一局还在继续（退出重进 / 设置返回重建），标记必须保留
+        // 恢复存档：读到空存档说明这一档是真正的新局，这时才清除它的「不上传」；
+        // 读到有效存档说明这一局还在继续（退出重进 / 设置返回重建 / 切走再切回来），标记必须保留
         guard("d0(save)", () -> XposedHelpers.findAndHookMethod(actCls, "d0", saveCls,
                 new XC_MethodHook() {
                     @Override
@@ -316,23 +318,39 @@ public final class TZFEHooks {
                         try {
                             Object save = param.args[0];
                             int row = (Integer) XposedHelpers.callMethod(save, "getRow");
-                            if (row <= 0) {
-                                // 没有存档 = 这局真的结束了/没保存，标记作废
+                            if (row > 0) {
+                                // 恢复的是哪一档的存档，就按哪一档的标记决定是否上传
+                                int col = (Integer) XposedHelpers.callMethod(save, "getColumn");
+                                String level = levelKey(row, col);
+                                sessionNoUpload = hasPersistNoUpload(act, level);
+                                if (sessionNoUpload) {
+                                    XposedHelpers.setAdditionalInstanceField(
+                                            act, KEY_NO_UPLOAD, Boolean.TRUE);
+                                } else {
+                                    XposedHelpers.removeAdditionalInstanceField(
+                                            act, KEY_NO_UPLOAD);
+                                }
+                            } else {
+                                // 没有存档 = 这一档真的没有在玩的棋局，该档标记作废
                                 sessionNoUpload = false;
-                                setPersistNoUpload(act, false);
+                                XposedHelpers.removeAdditionalInstanceField(act, KEY_NO_UPLOAD);
+                                String level = currentLevelKey(act);
+                                if (level != null) setPersistNoUpload(act, level, false);
                             }
                         } catch (Throwable ignored) {
                         }
                     }
                 }));
 
-        // 切换棋盘尺寸 = 开新局，撤销标记失效
+        // 切换尺寸：不能动旧尺寸的标记（它的存档还在，切回来还要继续不上传），
+        // 新尺寸的标记由随后 r0 → d0 按它自己的存档决定
         guard("l0(int)", () -> XposedHelpers.findAndHookMethod(actCls, "l0", int.class,
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         sessionNoUpload = false;
-                        setPersistNoUpload((Activity) param.thisObject, false);
+                        XposedHelpers.removeAdditionalInstanceField(
+                                (Activity) param.thisObject, KEY_NO_UPLOAD);
                     }
                 }));
 
@@ -369,8 +387,8 @@ public final class TZFEHooks {
                     protected void afterHookedMethod(MethodHookParam param) {
                         Activity act = (Activity) param.thisObject;
                         current = new WeakReference<>(act);
-                        // 进程重启后先看持久化标记：这局是从「用过撤销」的存档恢复的
-                        if (getPersistNoUpload(act)) sessionNoUpload = true;
+                        // 具体哪一档不上传，交给随后 r0 → d0 按那档的存档决定
+                        sessionNoUpload = false;
                         clearUndo(act);
                         addUndoButton(act);
                     }
@@ -530,7 +548,8 @@ public final class TZFEHooks {
             boolean first = !sessionNoUpload;
             sessionNoUpload = true;
             XposedHelpers.setAdditionalInstanceField(act, KEY_NO_UPLOAD, Boolean.TRUE);
-            setPersistNoUpload(act, true);
+            String level = currentLevelKey(act);
+            if (level != null) setPersistNoUpload(act, level, true);
             if (first) {
                 Ui.toast(act, "已撤销，本局成绩将不上传");
             }
@@ -1353,20 +1372,49 @@ public final class TZFEHooks {
         }
     }
 
-    private static void setPersistNoUpload(Activity act, boolean on) {
+    /** 存档按尺寸分档：方形 = 边长，自定义 = 行*100+列，撤销标记也按这个 key 存 */
+    private static String levelKey(int row, int col) {
+        return row == col ? String.valueOf(row) : String.valueOf(row * 100 + col);
+    }
+
+    /** 当前 Activity 正在玩的这一档（以棋盘真实尺寸为准） */
+    private static String currentLevelKey(Activity act) {
         try {
-            act.getApplicationContext().getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
-                    .edit().putBoolean(SP_NO_UPLOAD, on).apply();
-        } catch (Throwable ignored) {
+            Object game = XposedHelpers.getObjectField(act, "b");
+            if (game == null) return null;
+            int row = (Integer) XposedHelpers.callMethod(game, "g");
+            int col = (Integer) XposedHelpers.callMethod(game, "c");
+            if (row < 3 || row > 10 || col < 3 || col > 10) return null;
+            return levelKey(row, col);
+        } catch (Throwable t) {
+            return null;
         }
     }
 
-    private static boolean getPersistNoUpload(Activity act) {
+    private static Set<String> noUploadLevels(Activity act) {
         try {
-            return act.getApplicationContext().getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
-                    .getBoolean(SP_NO_UPLOAD, false);
+            Set<String> set = act.getApplicationContext()
+                    .getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
+                    .getStringSet(SP_NO_UPLOAD_LEVELS, null);
+            return set == null ? new HashSet<>() : new HashSet<>(set);
         } catch (Throwable t) {
-            return false;
+            return new HashSet<>();
+        }
+    }
+
+    private static boolean hasPersistNoUpload(Activity act, String level) {
+        return noUploadLevels(act).contains(level);
+    }
+
+    private static void setPersistNoUpload(Activity act, String level, boolean on) {
+        try {
+            Set<String> set = noUploadLevels(act);
+            boolean changed = on ? set.add(level) : set.remove(level);
+            if (!changed) return;
+            act.getApplicationContext()
+                    .getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
+                    .edit().putStringSet(SP_NO_UPLOAD_LEVELS, set).apply();
+        } catch (Throwable ignored) {
         }
     }
 
